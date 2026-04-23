@@ -5,4 +5,4 @@ agent:
 
 providers:
   config_file: "providers.yaml"
-  default_primary: "gpt-5"
+  default_primary: "qwen"

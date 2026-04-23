@@ -8,8 +8,10 @@ from functools import partial
 from pathlib import Path
 
 from agent.tools.builtin.file_ops import file_read, file_write
-from agent.tools.builtin.memory_tools import memory_write
+from agent.tools.builtin.memory_tools import memory_write, recall_memory
 from agent.tools.builtin.session_tools import read_skill, search_sessions
+from agent.tools.builtin.shell_tools import shell_exec
+from agent.tools.builtin.web_tools import web_search
 from agent.tools.models import ToolDefinition
 
 
@@ -45,14 +47,22 @@ def build_stage1_registry(
     always_on_memory,
     session_archive,
     skill_loader,
+    mflow_bridge=None,
+    enable_shell: bool = False,
+    enable_web_search: bool = True,
 ) -> ToolRegistry:
     """构建阶段一默认工具集。
 
-    这里刻意只暴露安全工具：
+    基础工具：
     - 文件读写
     - MEMORY 写入
     - 会话检索
     - 技能全文读取
+    - M-flow 深度检索（如果可用）
+
+    可选工具（需显式启用）：
+    - Shell 执行（需审批）
+    - Web 搜索
     """
 
     registry = ToolRegistry()
@@ -106,6 +116,71 @@ def build_stage1_registry(
             handler=partial(read_skill, skill_loader),
         )
     )
+
+    # M-flow 深度检索（可选）
+    if mflow_bridge is not None:
+        registry.register(
+            ToolDefinition(
+                name="recall_memory",
+                description=(
+                    "Deep memory retrieval using M-flow graph routing. "
+                    "Use for complex questions requiring causal reasoning or cross-session associations. "
+                    "Example: 'Why did I decide not to use Redis last week?'"
+                ),
+                schema=_schema(
+                    "recall_memory",
+                    "Graph-routed deep memory retrieval",
+                    {
+                        "question": _string_field("Question to search for"),
+                        "top_k": _integer_field("Number of episodes to return (default 3)"),
+                    },
+                ),
+                handler=partial(recall_memory, mflow_bridge),
+            )
+        )
+
+    # Shell 执行（需审批）
+    if enable_shell:
+        registry.register(
+            ToolDefinition(
+                name="shell_exec",
+                description=(
+                    "Execute a shell command in the workspace directory. "
+                    "**REQUIRES APPROVAL**. Use for running scripts, system commands, etc."
+                ),
+                schema=_schema(
+                    "shell_exec",
+                    "Execute shell command",
+                    {
+                        "command": _string_field("Shell command to execute"),
+                        "timeout": _integer_field("Timeout in seconds (default 30)"),
+                    },
+                ),
+                handler=partial(shell_exec, root),
+            )
+        )
+
+    # Web 搜索
+    if enable_web_search:
+        registry.register(
+            ToolDefinition(
+                name="web_search",
+                description=(
+                    "Search the web using DuckDuckGo. "
+                    "Returns titles, snippets, and URLs."
+                ),
+                schema=_schema(
+                    "web_search",
+                    "Web search",
+                    {
+                        "query": _string_field("Search query"),
+                        "num_results": _integer_field("Number of results (default 5)"),
+                    },
+                ),
+                handler=web_search,
+            )
+        )
+
     return registry
 
 

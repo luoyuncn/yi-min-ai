@@ -10,12 +10,15 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from uuid import uuid4
 
+from agent.core.compaction import CompactionEngine
 from agent.core.context import ContextAssembler
-from agent.core.provider import LLMRequest
-from agent.memory import AlwaysOnMemory, SessionArchive
+from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk
+from agent.memory import AlwaysOnMemory, SessionArchive, TurnData
+from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_now, text_preview, trace_fields
 from agent.session import SessionManager
 from agent.skills import SkillLoader
 from agent.tools import ToolExecutor, build_stage1_registry
@@ -36,6 +39,8 @@ from agent.web.events import (
 )
 from agent.web.runtime_state import PendingApprovalStore, RunControl, RunInterrupted
 
+logger = logging.getLogger(__name__)
+
 
 class AgentCore:
     """把各个子系统串起来的核心运行器。"""
@@ -49,6 +54,7 @@ class AgentCore:
         session_archive: SessionArchive,
         session_manager: SessionManager,
         skill_loader: SkillLoader,
+        mflow_bridge=None,
         max_iterations: int = 8,
         system_prompt: str = "You are Atlas.",
     ) -> None:
@@ -60,13 +66,19 @@ class AgentCore:
         self.session_archive = session_archive
         self.session_manager = session_manager
         self.skill_loader = skill_loader
+        self.mflow_bridge = mflow_bridge
         self.max_iterations = max_iterations
         self.context_assembler = ContextAssembler(system_prompt=system_prompt)
+        self.compaction_engine = CompactionEngine(
+            provider_manager=provider_manager,
+            session_archive=session_archive,
+        )
         self.tool_registry = build_stage1_registry(
             workspace_dir=self.workspace_dir,
             always_on_memory=self.always_on_memory,
             session_archive=self.session_archive,
             skill_loader=self.skill_loader,
+            mflow_bridge=self.mflow_bridge,
         )
         self.tool_executor = ToolExecutor(self.tool_registry)
 
@@ -92,10 +104,23 @@ class AgentCore:
 
         thread_id = message.session_id
         run_id = message.metadata.get("run_id") or message.message_id
+        metadata = message.metadata
+        ensure_trace_id(metadata, fallback_id=message.message_id)
+        run_started_at = monotonic_now()
+        metadata["run_started_at"] = run_started_at
+
+        logger.info(
+            f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+            f"event=run_started sender={message.sender} body_chars={len(message.body)} preview={text_preview(message.body)}"
+        )
         yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
 
         try:
             session = await self.session_manager.get_or_create(message.session_id, channel=message.channel)
+            logger.info(
+                f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+                f"event=session_loaded history_messages={len(session.history)}"
+            )
             command = message.metadata.get("command") or {}
             if command:
                 async for event in self._resume_from_command(
@@ -103,6 +128,8 @@ class AgentCore:
                     thread_id=thread_id,
                     run_id=run_id,
                     command=command,
+                    message_metadata=metadata,
+                    channel=message.channel,
                     runtime_control=runtime_control,
                     approval_store=approval_store,
                 ):
@@ -116,6 +143,12 @@ class AgentCore:
                 history=session.history,
                 user_message=message.body,
             )
+            logger.info(
+                f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+                f"event=context_assembled context_messages={len(context)} "
+                f"context_tokens={self.context_assembler.count_context_tokens(context)} "
+                f"tool_count={len(self.tool_registry.get_schemas())}"
+            )
             # 当前用户消息既要进入本次模型上下文，也要落进会话历史。
             session.append({"id": message.message_id, "role": "user", "content": message.body})
 
@@ -124,12 +157,19 @@ class AgentCore:
                 context,
                 thread_id=thread_id,
                 run_id=run_id,
+                message_metadata=metadata,
+                channel=message.channel,
                 runtime_control=runtime_control,
                 approval_store=approval_store,
             ):
                 yield event
         except Exception as exc:
             code = "RunInterrupted" if isinstance(exc, RunInterrupted) else type(exc).__name__
+            logger.error(
+                f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+                f"event=run_failed total_ms={elapsed_ms(run_started_at)} code={code} error={exc}",
+                exc_info=True,
+            )
             yield RunErrorEvent(message=str(exc), code=code)
 
     def run_sync(self, message) -> str:
@@ -144,35 +184,118 @@ class AgentCore:
         *,
         thread_id: str,
         run_id: str,
+        message_metadata: dict,
+        channel: str,
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
     ):
         for index in range(self.max_iterations):
             step_name = f"iteration-{index + 1}"
             self._ensure_active(runtime_control)
+            step_started_at = monotonic_now()
             yield StepStartedEvent(step_name=step_name)
-            response = await self.provider_manager.call(
-                LLMRequest(messages=context, tools=self.tool_registry.get_schemas())
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=step_started step_name={step_name}"
+            )
+
+            # Pre-flight: 检查是否需要压缩
+            token_count = self.context_assembler.count_context_tokens(context)
+            if self.compaction_engine.should_compact(context, token_count):
+                logger.info(f"Compacting context: {token_count} tokens")
+                context = await self.compaction_engine.compact(context)
+                token_count = self.context_assembler.count_context_tokens(context)
+                logger.info(f"After compaction: {token_count} tokens")
+
+            request = LLMRequest(messages=context, tools=self.tool_registry.get_schemas())
+            assistant_message_id = str(uuid4())
+            streamed_text_parts: list[str] = []
+            response: LLMResponse | None = None
+            emitted_stream_start = False
+            model_started_at = monotonic_now()
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=model_request_started step_name={step_name} context_messages={len(context)} "
+                f"tool_count={len(request.tools)}"
+            )
+
+            async for chunk in self._iter_provider_stream(request):
+                self._ensure_active(runtime_control)
+
+                if chunk.type == "text_delta":
+                    delta = chunk.delta or ""
+                    if not delta:
+                        continue
+                    if not emitted_stream_start:
+                        emitted_stream_start = True
+                        logger.info(
+                            f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                            f"event=model_first_token step_name={step_name} after_ms={elapsed_ms(model_started_at)}"
+                        )
+                        yield AssistantTextStartEvent(message_id=assistant_message_id)
+                    streamed_text_parts.append(delta)
+                    yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=delta)
+                    continue
+
+                if chunk.type == "response" and chunk.response is not None:
+                    response = chunk.response
+
+            if response is None:
+                raise RuntimeError("Provider stream ended without a final response")
+
+            streamed_text = "".join(streamed_text_parts)
+            response = self._coerce_response(response)
+            finalized_text = self._finalize_streamed_text(streamed_text, response.text)
+            if finalized_text != response.text:
+                response = self._coerce_response(response, text=finalized_text)
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=model_response_completed step_name={step_name} after_ms={elapsed_ms(model_started_at)} "
+                f"response_type={response.type} provider={response.provider or 'unknown'} "
+                f"model={response.model or 'unknown'} output_chars={len((response.text or ''))} "
+                f"tool_call_count={len(response.tool_calls or [])} streamed_chars={len(streamed_text)}"
             )
             self._ensure_active(runtime_control)
             if response.type == "text":
-                assistant_text = response.text or ""
-                assistant_message_id = str(uuid4())
-                yield AssistantTextStartEvent(message_id=assistant_message_id)
-                if assistant_text:
+                assistant_text = response.text or streamed_text
+                if emitted_stream_start:
+                    tail_delta = self._stream_tail(streamed_text, assistant_text)
+                    if tail_delta:
+                        yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=tail_delta)
+                    yield AssistantTextEndEvent(message_id=assistant_message_id)
+                elif assistant_text:
+                    yield AssistantTextStartEvent(message_id=assistant_message_id)
                     yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=assistant_text)
-                yield AssistantTextEndEvent(message_id=assistant_message_id)
+                    yield AssistantTextEndEvent(message_id=assistant_message_id)
                 session.append({"id": assistant_message_id, "role": "assistant", "content": assistant_text})
                 self.session_archive.persist_session(session)
+
+                # 异步写入 M-flow（非阻塞）
+                await self._ingest_to_mflow(session, thread_id)
+
                 yield StepFinishedEvent(step_name=step_name)
+                logger.info(
+                    f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                    f"event=step_finished step_name={step_name} step_ms={elapsed_ms(step_started_at)}"
+                )
+                logger.info(
+                    f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                    f"event=run_finished total_ms={elapsed_ms(message_metadata.get('run_started_at'))} "
+                    f"result_chars={len(assistant_text or '')}"
+                )
                 yield RunFinishedEvent(thread_id=thread_id, run_id=run_id, result_text=assistant_text)
                 return
 
-            assistant_message_id = str(uuid4())
             if response.text:
-                yield AssistantTextStartEvent(message_id=assistant_message_id)
-                yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=response.text)
-                yield AssistantTextEndEvent(message_id=assistant_message_id)
+                if emitted_stream_start:
+                    tail_delta = self._stream_tail(streamed_text, response.text)
+                    if tail_delta:
+                        yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=tail_delta)
+                    yield AssistantTextEndEvent(message_id=assistant_message_id)
+                else:
+                    yield AssistantTextStartEvent(message_id=assistant_message_id)
+                    yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=response.text)
+                    yield AssistantTextEndEvent(message_id=assistant_message_id)
 
             assistant_message = {
                 "id": assistant_message_id,
@@ -191,6 +314,9 @@ class AgentCore:
                 parent_message_id=assistant_message_id,
                 thread_id=thread_id,
                 run_id=run_id,
+                step_name=step_name,
+                message_metadata=message_metadata,
+                channel=channel,
                 approval_store=approval_store,
             ):
                 if isinstance(event, CustomEvent):
@@ -198,11 +324,71 @@ class AgentCore:
                 yield event
 
             yield StepFinishedEvent(step_name=step_name)
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=step_finished step_name={step_name} step_ms={elapsed_ms(step_started_at)}"
+            )
             if interrupted:
+                logger.info(
+                    f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                    f"event=run_finished total_ms={elapsed_ms(message_metadata.get('run_started_at'))} result_chars=0"
+                )
                 yield RunFinishedEvent(thread_id=thread_id, run_id=run_id, result_text="")
                 return
 
         yield RunErrorEvent(message="max iterations exceeded")
+
+    async def _iter_provider_stream(self, request: LLMRequest):
+        """兼容旧 ProviderManager，只要有 `call` 就能工作。"""
+
+        call_stream = getattr(self.provider_manager, "call_stream", None)
+        if call_stream is None:
+            yield LLMStreamChunk(type="response", response=await self.provider_manager.call(request))
+            return
+
+        async for chunk in call_stream(request):
+            yield chunk
+
+    def _finalize_streamed_text(self, streamed_text: str, response_text: str | None) -> str:
+        """以最终响应文本为准，并在可用时保留已流出的内容。"""
+
+        if response_text is None:
+            return streamed_text
+
+        if not streamed_text:
+            return response_text
+
+        if response_text.startswith(streamed_text):
+            return response_text
+
+        return response_text
+
+    def _coerce_response(self, response, *, text: str | None | object = None) -> LLMResponse:
+        """兼容历史测试桩，只要求响应对象具备最小字段。"""
+
+        resolved_text = getattr(response, "text", None) if text is None else text
+        return LLMResponse(
+            type=response.type,
+            text=resolved_text,
+            tool_calls=getattr(response, "tool_calls", None),
+            provider=getattr(response, "provider", ""),
+            model=getattr(response, "model", ""),
+            usage=getattr(response, "usage", {}) or {},
+        )
+
+    def _stream_tail(self, streamed_text: str, response_text: str) -> str:
+        """补齐流式过程中尚未发出的尾部文本。"""
+
+        if not streamed_text:
+            return response_text
+
+        if response_text.startswith(streamed_text):
+            return response_text[len(streamed_text) :]
+
+        return ""
+
+    def _is_tool_failure_result(self, result: str) -> bool:
+        return (result or "").startswith("Tool execution failed:")
 
     async def _execute_tool_calls(
         self,
@@ -213,6 +399,9 @@ class AgentCore:
         parent_message_id: str,
         thread_id: str,
         run_id: str,
+        step_name: str,
+        message_metadata: dict,
+        channel: str,
         approval_store: PendingApprovalStore | None,
     ):
         for tool_call in tool_calls:
@@ -225,6 +414,11 @@ class AgentCore:
                     message=f"Approval required for {tool_call['name']}",
                 )
                 self.session_archive.persist_session(session)
+                logger.info(
+                    f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                    f"event=tool_approval_requested step_name={step_name} tool_name={tool_call['name']} "
+                    f"tool_call_id={tool_call['id']}"
+                )
                 yield CustomEvent(
                     name="on_interrupt",
                     value={
@@ -240,6 +434,12 @@ class AgentCore:
                 return
 
             args_json = json.dumps(tool_call["input"], ensure_ascii=False)
+            tool_started_at = monotonic_now()
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=tool_execution_started step_name={step_name} tool_name={tool_call['name']} "
+                f"tool_call_id={tool_call['id']} args_chars={len(args_json)}"
+            )
             yield ToolCallStartEvent(
                 tool_call_id=tool_call["id"],
                 tool_call_name=tool_call["name"],
@@ -261,6 +461,12 @@ class AgentCore:
                 content=result,
             )
             yield ToolCallEndEvent(tool_call_id=tool_call["id"])
+            logger.info(
+                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=tool_execution_completed step_name={step_name} tool_name={tool_call['name']} "
+                f"tool_call_id={tool_call['id']} after_ms={elapsed_ms(tool_started_at)} "
+                f"result_chars={len(result or '')} failed={self._is_tool_failure_result(result)}"
+            )
             session.append(tool_message)
             context.append(tool_message)
 
@@ -271,6 +477,8 @@ class AgentCore:
         thread_id: str,
         run_id: str,
         command: dict,
+        message_metadata: dict,
+        channel: str,
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
     ):
@@ -292,6 +500,10 @@ class AgentCore:
         self._ensure_active(runtime_control)
         yield StepStartedEvent(step_name="approval-resume")
         approved = bool((command.get("resume") or {}).get("approved"))
+        logger.info(
+            f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+            f"event=approval_resume_started tool_name={pending.tool_call['name']} approved={approved}"
+        )
         yield ToolCallStartEvent(
             tool_call_id=pending.tool_call["id"],
             tool_call_name=pending.tool_call["name"],
@@ -328,6 +540,8 @@ class AgentCore:
             context,
             thread_id=thread_id,
             run_id=run_id,
+            message_metadata=message_metadata,
+            channel=channel,
             runtime_control=runtime_control,
             approval_store=approval_store,
         ):
@@ -339,6 +553,60 @@ class AgentCore:
 
     def _requires_approval(self, tool_name: str) -> bool:
         return tool_name in {"file_write", "memory_write"}
+
+    async def _ingest_to_mflow(self, session, thread_id: str) -> None:
+        """异步将最新一轮对话写入 M-flow（非阻塞）"""
+        if self.mflow_bridge is None:
+            return
+
+        try:
+            # 提取最新一轮的用户消息和助手回复
+            messages = list(getattr(session, "history", []))
+            if len(messages) < 2:
+                return
+
+            # 找到最后一个用户消息和助手回复
+            user_msg = None
+            assistant_msg = None
+            tool_calls = []
+
+            for i in range(len(messages) - 1, -1, -1):
+                msg = messages[i]
+                if msg.get("role") == "assistant" and assistant_msg is None:
+                    assistant_msg = msg
+                    if msg.get("tool_calls"):
+                        tool_calls = msg["tool_calls"]
+                elif msg.get("role") == "user" and user_msg is None:
+                    user_msg = msg
+                    break
+
+            if not user_msg or not assistant_msg:
+                return
+
+            from datetime import datetime
+
+            turn_data = TurnData(
+                session_id=thread_id,
+                turn_index=len(messages) // 2,  # 粗略估计轮次
+                timestamp=datetime.now(),
+                user_message=user_msg.get("content", ""),
+                assistant_response=assistant_msg.get("content", ""),
+                tool_calls=[
+                    {
+                        "name": tc.get("function", {}).get("name", ""),
+                        "summary": f"{tc.get('function', {}).get('name', '')}(...)",
+                    }
+                    for tc in tool_calls
+                ] if tool_calls else None,
+            )
+
+            # 异步写入，不等待结果
+            asyncio.create_task(self.mflow_bridge.ingest_turn(turn_data))
+
+        except Exception as e:
+            # 写入失败不应该影响主流程
+            import logging
+            logging.getLogger(__name__).warning(f"M-flow ingestion failed: {e}")
 
     @classmethod
     def build_for_test(cls, workspace_dir: Path, provider_manager) -> "AgentCore":

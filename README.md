@@ -50,11 +50,27 @@ Yi Min AI Assistant
 
 ## 环境要求
 
-- Python `3.12+`
-- `uv`
-- Node.js `24+`（如果你要重新构建 Web 前端）
+### Windows 测试环境
 
-如果你还没有 `uv`，先安装它，再继续下面步骤。
+- Python `3.12+`
+- `uv` 包管理器
+- Node.js `24+`（如果重新构建 Web 前端）
+
+### Linux 生产环境
+
+- Python `3.12+`
+- `uv` 包管理器
+- systemd（服务管理）
+
+**安装 uv：**
+
+```bash
+# Linux/macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
 ## 安装依赖
 
@@ -63,6 +79,15 @@ Yi Min AI Assistant
 ```bash
 uv sync
 ```
+
+**注意**：一期完整版新增依赖：
+- `lark-oapi` - 飞书 SDK
+- `lancedb` - M-flow 向量存储
+- `python-croniter` + `pytz` - Cron 调度
+- `tiktoken` - Token 计数
+- `duckduckgo-search` - Web 搜索
+
+如果你只需要基础功能（CLI + Web），无需安装 M-flow 和飞书相关依赖。
 
 ## 环境变量
 
@@ -83,9 +108,98 @@ Copy-Item .env.example .env
 - 已经存在于进程环境里的变量优先级更高，不会被 `.env` 覆盖
 - 使用自定义 OpenAI 兼容网关时，`base_url` 通常应指向 API 根路径，例如 `http://host:port/v1`
 
-## 阶段一怎么测试
+## 🚀 统一启动命令（推荐）
 
-建议你先按下面顺序测。
+**一个命令启动所有功能：**
+
+```bash
+# 默认模式（Gateway + Heartbeat + Cron + 飞书）
+uv run python -m agent.main
+
+# 测试模式（无需 API Key）
+uv run python -m agent.main --mode cli --testing
+
+# 仅 Web UI
+uv run python -m agent.main --mode web
+
+# 同时启动 Web + Gateway
+uv run python -m agent.main --mode all
+```
+
+**环境变量配置（生产模式）：**
+
+```bash
+# PowerShell (Windows)
+$env:FEISHU_APP_ID="cli_xxxxxxxxxxxxxxx"
+$env:FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxx"
+$env:OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxx"
+
+# Bash (Linux/macOS)
+export FEISHU_APP_ID=cli_xxxxxxxxxxxxxxx
+export FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
+export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
+```
+
+**或使用 `.env` 文件（推荐）：**
+
+```bash
+# 创建 .env 文件
+cp .env.example .env
+# 编辑填入实际凭证
+nano .env
+```
+
+---
+
+## 启动模式说明
+
+### 模式 1: CLI（命令行交互）
+
+```bash
+uv run python -m agent.main --mode cli --testing
+```
+
+**用途：** 本地测试、开发调试
+
+### 模式 2: Web（浏览器 UI）
+
+```bash
+uv run python -m agent.main --mode web --testing
+```
+
+**用途：** 可视化测试，访问 http://127.0.0.1:8000
+
+### 模式 3: Gateway（生产推荐）⭐
+
+```bash
+# 默认模式（自动启用所有功能）
+uv run python -m agent.main
+
+# 等价于
+uv run python -m agent.main \
+  --mode gateway \
+  --enable-feishu \
+  --enable-heartbeat \
+  --enable-cron
+```
+
+**用途：**
+- ✅ 飞书实时接收消息
+- ✅ Heartbeat 主动检查任务（默认 30 分钟）
+- ✅ Cron 定时执行（如每天 8 点发简报）
+- ✅ 适合 24/7 运行
+
+### 模式 4: All（Web + Gateway 同时）
+
+```bash
+uv run python -m agent.main --mode all
+```
+
+**用途：** 既能用飞书，又能用浏览器查看
+
+---
+
+## 快速测试
 
 ### 1. 跑自动化测试
 
@@ -93,15 +207,11 @@ Copy-Item .env.example .env
 uv run pytest -v
 ```
 
-当前阶段一应当是全绿。
+### 2. CLI 测试模式
 
-### 2. 用测试模式启动 CLI
+最快速的验证方式（无需任何配置）：
 
-这是最推荐的第一步，因为它不依赖外部模型 API Key，也能完整演示普通回复和工具调用链。
-
-PowerShell:
-
-```powershell
+```bash
 uv run python -m agent.cli.main --config config/agent.yaml --testing
 ```
 
@@ -213,22 +323,29 @@ uv run python -m agent.cli.main --config config/agent.yaml
 - 如果你把 `default_primary` 切回 `claude-sonnet`，则需要设置 `ANTHROPIC_API_KEY`
 - 当前默认配置文件在 `config/providers.yaml`
 
-## 当前阶段一工具集
+## 可用工具集
 
-阶段一只开放了安全子集工具：
+### 基础工具（默认启用）
 
-- `file_read`
-- `file_write`
-- `memory_write`
-- `search_sessions`
-- `read_skill`
+- `file_read` - 读取工作区文件
+- `file_write` - 写入工作区文件（需审批）
+- `memory_write` - 修改 MEMORY.md（需审批）
+- `search_sessions` - SQLite FTS5 会话检索
+- `read_skill` - 按需加载 Skill 完整内容
 
-这里故意没有开放：
+### M-flow 深度记忆
 
-- `shell_exec`
-- `web_search`
+- `recall_memory` - 图路由深度检索，适用于因果推理和跨会话关联
 
-因为它们会把审批流和外部依赖一起带进来，属于后续阶段内容。
+### 可选工具（需配置启用）
+
+- `shell_exec` - 执行 Shell 命令（需审批）
+- `web_search` - DuckDuckGo Web 搜索
+
+### MCP 工具（预留）
+
+MCP Client 框架已实现，配置文件：`config/mcp_servers.yaml`。
+二期接入外部 Server 时只需添加配置，无需改动代码。
 
 ## 测试模式和真实模式的区别
 

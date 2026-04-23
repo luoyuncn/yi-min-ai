@@ -1,0 +1,23 @@
+# MCP Server 配置文件
+# 一期：不接入任何外部 MCP Server
+# 二期示例配置（取消注释即可启用）：
+#
+# servers:
+#   google_calendar:
+#     transport: "stdio"
+#     command: "npx"
+#     args: ["-y", "@anthropic/mcp-google-calendar"]
+#     env:
+#       GOOGLE_CREDENTIALS_PATH: "~/.config/google/credentials.json"
+#
+#   gmail:
+#     transport: "stdio"
+#     command: "npx"
+#     args: ["-y", "@anthropic/mcp-gmail"]
+#     requires_approval: true
+#
+#   notion:
+#     transport: "sse"
+#     url: "http://localhost:3100/sse"
+
+servers: {}  # 一期为空

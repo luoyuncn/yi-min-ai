@@ -44,3 +44,24 @@ async def test_provider_manager_calls_registered_primary_provider() -> None:
 
     assert response.text == "pong"
     assert response.provider == "claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_provider_manager_call_stream_falls_back_to_call() -> None:
+    """Provider 未实现流式接口时，manager 应自动退化到普通调用。"""
+
+    config = ProviderConfig(
+        name="claude-sonnet",
+        provider_type="anthropic",
+        model="claude-sonnet-4-20250514",
+        api_key_env="ANTHROPIC_API_KEY",
+    )
+    manager = ProviderManager(provider_factories={"anthropic": FakeProvider})
+    await manager.register(config, make_primary=True)
+
+    chunks = [chunk async for chunk in manager.call_stream(LLMRequest(messages=[{"role": "user", "content": "ping"}]))]
+
+    assert len(chunks) == 1
+    assert chunks[0].type == "response"
+    assert chunks[0].response is not None
+    assert chunks[0].response.text == "pong"

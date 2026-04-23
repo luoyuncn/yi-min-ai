@@ -6,6 +6,7 @@
 """
 
 from agent.memory.always_on import AlwaysOnMemory
+from agent.memory.mflow_bridge import MflowBridge, TurnData, EpisodeBundle
 from agent.memory.session_archive import SessionArchive
 
-__all__ = ["AlwaysOnMemory", "SessionArchive"]
+__all__ = ["AlwaysOnMemory", "SessionArchive", "MflowBridge", "TurnData", "EpisodeBundle"]

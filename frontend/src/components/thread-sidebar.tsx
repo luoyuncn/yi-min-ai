@@ -10,18 +10,15 @@ interface ThreadSidebarProps {
   threads: ThreadSummary[];
 }
 
-function formatUpdatedAt(value: string): string {
-  if (!value) {
-    return "刚刚";
-  }
-
-  const date = new Date(value);
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+function timeLabel(value: string): string {
+  if (!value) return "";
+  const diff = Date.now() - new Date(value).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d`;
 }
 
 export function ThreadSidebar({
@@ -32,71 +29,64 @@ export function ThreadSidebar({
   setSearch,
   threads,
 }: ThreadSidebarProps) {
-  const deferredSearch = useDeferredValue(search.trim().toLowerCase());
-  const filteredThreads = threads.filter((thread) => {
-    if (!deferredSearch) {
-      return true;
-    }
-    return (
-      thread.thread_id.toLowerCase().includes(deferredSearch) ||
-      thread.last_message.toLowerCase().includes(deferredSearch)
-    );
-  });
+  const query = useDeferredValue(search.trim().toLowerCase());
+  const filtered = threads.filter((t) =>
+    !query ||
+    t.thread_id.toLowerCase().includes(query) ||
+    t.last_message.toLowerCase().includes(query),
+  );
 
   return (
-    <aside className="thread-sidebar">
-      <div className="panel-title-row">
-        <div>
-          <p className="eyebrow">Thread Deck</p>
-          <h2>会话档案</h2>
-        </div>
-        <button className="ghost-button" onClick={onNewThread} type="button">
-          新建
-        </button>
+    <div className="thread-sidebar">
+      <div className="thread-sidebar-header">
+        <span className="thread-sidebar-label">会话</span>
+        <span className="thread-sidebar-label" style={{ color: "var(--text-3)" }}>
+          {threads.length}
+        </span>
       </div>
 
-      <label className="search-shell">
-        <span>筛选</span>
+      <div className="search-shell">
         <input
           className="search-input"
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="按 thread 或最近消息搜索"
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索对话…"
           value={search}
         />
-      </label>
+      </div>
 
       <div className="thread-list">
         <button
-          className={`thread-card ephemeral-thread ${activeThreadId.startsWith("web:new:") ? "active" : ""}`}
+          className={`thread-card ephemeral-thread${activeThreadId.startsWith("web:new:") ? " active" : ""}`}
           onClick={onNewThread}
           type="button"
         >
-          <div className="thread-card-head">
-            <strong>新对话草稿</strong>
-            <span>未落库</span>
-          </div>
-          <p>切换到一个全新的 thread，首次发言后会自动进入归档列表。</p>
+          <div className="thread-card-id">新对话草稿</div>
+          <div className="thread-card-msg">点击开始一次全新的对话</div>
         </button>
 
-        {filteredThreads.map((thread) => (
+        {filtered.map((thread) => (
           <button
-            className={`thread-card ${thread.thread_id === activeThreadId ? "active" : ""}`}
+            className={`thread-card${thread.thread_id === activeThreadId ? " active" : ""}`}
             key={thread.thread_id}
             onClick={() => onSelectThread(thread.thread_id)}
             type="button"
           >
-            <div className="thread-card-head">
-              <strong>{thread.thread_id}</strong>
-              <span>{formatUpdatedAt(thread.updated_at)}</span>
+            <div className="thread-card-id">{thread.thread_id}</div>
+            <div className="thread-card-msg">
+              {thread.last_message || "暂无消息"}
             </div>
-            <p>{thread.last_message || "这个 thread 还没有可显示的文本内容。"}</p>
             <div className="thread-card-meta">
-              <span>{thread.message_count} 条消息</span>
-              {thread.pending_approval ? <span className="pending-badge">待审批</span> : null}
+              <span>{thread.message_count} 条</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {thread.pending_approval && (
+                  <span className="pending-badge">待审批</span>
+                )}
+                <span>{timeLabel(thread.updated_at)}</span>
+              </span>
             </div>
           </button>
         ))}
       </div>
-    </aside>
+    </div>
   );
 }

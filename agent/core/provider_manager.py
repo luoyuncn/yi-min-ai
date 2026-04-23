@@ -8,7 +8,9 @@
 后续多 Provider fallback、健康检查等能力都可以在这里继续扩展。
 """
 
-from agent.core.provider import LLMRequest, LLMResponse, ProviderConfig
+from typing import Any, AsyncIterator
+
+from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk, ProviderConfig
 from agent.providers.anthropic import AnthropicProvider
 from agent.providers.openai_compat import OpenAICompatProvider
 
@@ -21,7 +23,7 @@ class ProviderManager:
             "anthropic": AnthropicProvider,
             "openai": OpenAICompatProvider,
         }
-        self._providers: dict[str, object] = {}
+        self._providers: dict[str, Any] = {}
         self._primary: str | None = None
 
     async def register(self, config: ProviderConfig, make_primary: bool = False) -> None:
@@ -46,3 +48,18 @@ class ProviderManager:
 
         provider = self._providers[self._primary]
         return await provider.call(request)
+
+    async def call_stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:
+        """把请求转发给当前 primary provider 的流式接口。"""
+
+        if self._primary is None:
+            raise RuntimeError("No primary provider is registered")
+
+        provider = self._providers[self._primary]
+        call_stream = getattr(provider, "call_stream", None)
+        if call_stream is None:
+            yield LLMStreamChunk(type="response", response=await provider.call(request))
+            return
+
+        async for chunk in call_stream(request):
+            yield chunk

@@ -15,8 +15,8 @@ providers:
     # provider 代码会对 bare host 自动补 `/v1`，这里仍显式写出以减少歧义
     base_url: "http://142.171.209.142:8888/v1"
   #
-  # - name: "deepseek-chat"
-  #   type: "openai"
-  #   model: "deepseek-chat"
-  #   api_key_env: "DEEPSEEK_API_KEY"
-  #   base_url: "https://api.deepseek.com/v1"
+  - name: "qwen"
+    type: "openai"
+    model: "qwen3.6-plus"
+    api_key_env: "OPENAI_API_KEY"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"

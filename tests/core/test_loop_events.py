@@ -1,9 +1,11 @@
 """AgentCore 事件流测试。"""
 
 import asyncio
+import logging
 from pathlib import Path
 
 from agent.core.loop import AgentCore
+from agent.core.provider import LLMResponse, LLMStreamChunk
 from agent.gateway.normalizer import NormalizedMessage
 from agent.web.runtime_state import PendingApprovalStore, RunControl
 
@@ -54,6 +56,21 @@ class SlowProviderManager:
     async def call(self, request):
         await asyncio.sleep(0.05)
         return type("Resp", (), {"type": "text", "text": "slow done", "tool_calls": None})()
+
+
+class StreamingProviderManager:
+    """用于验证核心循环会消费 provider 的流式输出。"""
+
+    async def call(self, request):
+        raise AssertionError("streaming path should be preferred")
+
+    async def call_stream(self, request):
+        yield LLMStreamChunk(type="text_delta", delta="你")
+        yield LLMStreamChunk(type="text_delta", delta="好")
+        yield LLMStreamChunk(
+            type="response",
+            response=LLMResponse(type="text", text="你好"),
+        )
 
 
 def test_run_events_emits_tool_trace(tmp_path: Path) -> None:
@@ -204,3 +221,61 @@ def test_run_events_stops_when_runtime_control_is_interrupted(tmp_path: Path) ->
     events = asyncio.run(collect())
 
     assert any(event.kind == "run_error" and event.code == "RunInterrupted" for event in events)
+
+
+def test_run_events_streams_multiple_text_deltas_from_provider(tmp_path: Path) -> None:
+    """provider 支持流式时，核心循环应逐段透传文本 delta。"""
+
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    core = AgentCore.build_for_test(workspace, StreamingProviderManager())
+    message = NormalizedMessage(
+        message_id="1",
+        session_id="thread-stream",
+        sender="user",
+        body="你好",
+        attachments=[],
+        channel="web",
+        metadata={},
+    )
+
+    async def collect():
+        return [event async for event in core.run_events(message)]
+
+    events = asyncio.run(collect())
+
+    deltas = [event.delta for event in events if event.kind == "assistant_text_delta"]
+    assert deltas == ["你", "好"]
+    assert events[-1].kind == "run_finished"
+    assert events[-1].result_text == "你好"
+
+
+def test_run_events_logs_first_token_for_streaming_provider(tmp_path: Path, caplog) -> None:
+    """provider 流式输出时，应记录首 token 时间点。"""
+
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    core = AgentCore.build_for_test(workspace, StreamingProviderManager())
+    message = NormalizedMessage(
+        message_id="stream-log-1",
+        session_id="thread-stream-log",
+        sender="user",
+        body="你好",
+        attachments=[],
+        channel="web",
+        metadata={},
+    )
+    caplog.set_level(logging.INFO, logger="agent.core.loop")
+
+    async def collect():
+        return [event async for event in core.run_events(message)]
+
+    asyncio.run(collect())
+
+    log_text = caplog.text
+    assert "event=model_first_token" in log_text
+    assert "event=model_response_completed" in log_text

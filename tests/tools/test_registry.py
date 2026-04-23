@@ -19,4 +19,5 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
         "memory_write",
         "search_sessions",
         "read_skill",
+        "web_search",
     }

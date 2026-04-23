@@ -9,7 +9,7 @@ import os
 
 from anthropic import AsyncAnthropic
 
-from agent.core.provider import LLMProvider, LLMRequest, LLMResponse
+from agent.core.provider import LLMProvider, LLMRequest, LLMResponse, LLMStreamChunk
 
 
 class AnthropicProvider(LLMProvider):
@@ -30,6 +30,23 @@ class AnthropicProvider(LLMProvider):
     async def call(self, request: LLMRequest) -> LLMResponse:
         """执行一次 Anthropic 非流式调用。"""
 
+        kwargs = self._build_request_kwargs(request)
+        response = await self._client.messages.create(**kwargs)
+        return self._convert_response(response)
+
+    async def call_stream(self, request: LLMRequest):
+        """执行 Anthropic 流式调用，并把文本增量逐段透传。"""
+
+        kwargs = self._build_request_kwargs(request)
+        async with self._client.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                if text:
+                    yield LLMStreamChunk(type="text_delta", delta=text)
+            response = await stream.get_final_message()
+
+        yield LLMStreamChunk(type="response", response=self._convert_response(response))
+
+    def _build_request_kwargs(self, request: LLMRequest) -> dict:
         system_prompt, messages = self._convert_messages(request.messages)
         kwargs = {
             "model": self.config.model,
@@ -40,9 +57,7 @@ class AnthropicProvider(LLMProvider):
             kwargs["system"] = system_prompt
         if request.tools:
             kwargs["tools"] = self._convert_tools(request.tools)
-
-        response = await self._client.messages.create(**kwargs)
-        return self._convert_response(response)
+        return kwargs
 
     def _convert_messages(self, messages: list[dict]) -> tuple[str, list[dict]]:
         """把内部消息格式转换成 Anthropic messages API 所需格式。"""

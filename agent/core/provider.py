@@ -6,7 +6,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator
 
 
 @dataclass(slots=True)
@@ -47,6 +47,15 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class LLMStreamChunk:
+    """流式调用过程中产生的增量块。"""
+
+    type: str
+    delta: str | None = None
+    response: LLMResponse | None = None
+
+
 class LLMProvider(ABC):
     """所有 Provider 实现都要遵守的最小接口。"""
 
@@ -60,3 +69,11 @@ class LLMProvider(ABC):
     @abstractmethod
     async def call(self, request: LLMRequest) -> LLMResponse:
         """Execute a non-streaming model call."""
+
+    async def call_stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:
+        """Execute a streaming model call when supported.
+
+        默认退化成一次性返回完整响应，方便旧实现逐步升级。
+        """
+
+        yield LLMStreamChunk(type="response", response=await self.call(request))

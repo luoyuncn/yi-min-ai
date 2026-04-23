@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from openai import AsyncOpenAI
 
-from agent.core.provider import LLMProvider, LLMRequest, LLMResponse
+from agent.core.provider import LLMProvider, LLMRequest, LLMResponse, LLMStreamChunk
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -32,6 +32,81 @@ class OpenAICompatProvider(LLMProvider):
         self._client = AsyncOpenAI(**kwargs)
 
     async def call(self, request: LLMRequest) -> LLMResponse:
+        kwargs = self._build_request_kwargs(request)
+        response = await self._client.chat.completions.create(**kwargs)
+        return self._convert_response(response)
+
+    async def call_stream(self, request: LLMRequest):
+        """执行 OpenAI Chat Completions 流式调用。"""
+
+        kwargs = self._build_request_kwargs(request)
+        kwargs["stream"] = True
+        stream = await self._client.chat.completions.create(**kwargs)
+
+        text_parts: list[str] = []
+        tool_calls: dict[int, dict[str, object]] = {}
+        usage: dict[str, int] = {}
+
+        async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = {
+                    "input_tokens": chunk.usage.prompt_tokens,
+                    "output_tokens": chunk.usage.completion_tokens,
+                }
+
+            if not getattr(chunk, "choices", None):
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            if delta.content:
+                text_parts.append(delta.content)
+                yield LLMStreamChunk(type="text_delta", delta=delta.content)
+
+            for tool_call in delta.tool_calls or []:
+                current = tool_calls.setdefault(
+                    tool_call.index,
+                    {
+                        "id": tool_call.id or f"tool-call-{tool_call.index}",
+                        "name": "",
+                        "arguments_parts": [],
+                    },
+                )
+                if tool_call.id:
+                    current["id"] = tool_call.id
+
+                function = tool_call.function
+                if function is None:
+                    continue
+                if function.name:
+                    current["name"] = function.name
+                if function.arguments:
+                    current["arguments_parts"].append(function.arguments)
+
+        converted_tool_calls = [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "input": json.loads("".join(item["arguments_parts"]) or "{}"),
+            }
+            for _, item in sorted(tool_calls.items())
+        ]
+        response_text = "".join(text_parts) or None
+        response_type = "tool_calls" if converted_tool_calls else "text"
+        yield LLMStreamChunk(
+            type="response",
+            response=LLMResponse(
+                type=response_type,
+                text=response_text,
+                tool_calls=converted_tool_calls or None,
+                provider=self.config.name,
+                model=self.config.model,
+                usage=usage,
+            ),
+        )
+
+    def _build_request_kwargs(self, request: LLMRequest) -> dict:
         kwargs = {
             "model": self.config.model,
             "messages": self._convert_messages(request.messages),
@@ -40,9 +115,7 @@ class OpenAICompatProvider(LLMProvider):
         if request.tools:
             kwargs["tools"] = self._convert_tools(request.tools)
             kwargs["tool_choice"] = "auto"
-
-        response = await self._client.chat.completions.create(**kwargs)
-        return self._convert_response(response)
+        return kwargs
 
     def _convert_messages(self, messages: list[dict]) -> list[dict]:
         """把内部消息格式转换成 OpenAI messages 格式。

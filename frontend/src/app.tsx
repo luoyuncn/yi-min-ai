@@ -15,6 +15,20 @@ function createThreadId(): string {
   return `web:new:${crypto.randomUUID()}`;
 }
 
+const IconSidebar = () => (
+  <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+    <rect x="1.5" y="1.5" width="15" height="15" rx="3" stroke="currentColor" strokeWidth="1.4"/>
+    <line x1="6" y1="1.5" x2="6" y2="16.5" stroke="currentColor" strokeWidth="1.4"/>
+  </svg>
+);
+
+const IconCompose = () => (
+  <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+    <path d="M9 14H15" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+    <path d="M3 14L3.6 11.4L12 3L15 6L6.6 14.4L3 14Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/>
+  </svg>
+);
+
 function AppShell({
   selectedThreadId,
   onNewThread,
@@ -24,48 +38,28 @@ function AppShell({
 }: {
   selectedThreadId: string;
   onNewThread: () => void;
-  onSelectThread: (threadId: string) => void;
-  refreshThreads: () => void;
+  onSelectThread: (id: string) => void;
   threads: ThreadSummary[];
+  refreshThreads: () => void;
 }) {
+  const [panelOpen, setPanelOpen] = useState(true);
   const [search, setSearch] = useState("");
-  const [runState, setRunState] = useState<{
-    active: boolean;
-    runId: string | null;
-    error: string | null;
-  }>({
-    active: false,
-    runId: null,
-    error: null,
-  });
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runActive, setRunActive] = useState(false);
   const { agent } = useAgent();
-  const refreshThreadsEvent = useEffectEvent(() => {
-    startTransition(() => {
-      refreshThreads();
-    });
+
+  const refreshEvent = useEffectEvent(() => {
+    startTransition(() => refreshThreads());
   });
 
   useEffect(() => {
-    const subscription = agent.subscribe({
-      onRunStartedEvent: ({ event }) => {
-        setRunState({ active: true, runId: event.runId, error: null });
-      },
-      onRunFinishedEvent: () => {
-        setRunState((current) => ({ ...current, active: false }));
-        refreshThreadsEvent();
-      },
-      onRunErrorEvent: ({ event }) => {
-        setRunState((current) => ({
-          ...current,
-          active: false,
-          error: event.message,
-        }));
-        refreshThreadsEvent();
-      },
+    const sub = agent.subscribe({
+      onRunStartedEvent: () => { setRunActive(true); setRunError(null); },
+      onRunFinishedEvent: () => { setRunActive(false); refreshEvent(); },
+      onRunErrorEvent: ({ event }) => { setRunActive(false); setRunError(event.message); refreshEvent(); },
     });
-
-    return () => subscription.unsubscribe();
-  }, [agent, refreshThreadsEvent]);
+    return () => sub.unsubscribe();
+  }, [agent, refreshEvent]);
 
   useEffect(() => {
     localStorage.setItem("yiminai.activeThreadId", selectedThreadId);
@@ -83,47 +77,35 @@ function AppShell({
   });
 
   const handleStop = useEffectEvent(async () => {
-    const yiMinAgent = agent as YiMinHttpAgent;
     try {
-      await yiMinAgent.interruptActiveRun();
-    } catch (error) {
-      console.error("Failed to interrupt active run", error);
+      await (agent as YiMinHttpAgent).interruptActiveRun();
+    } catch (e) {
+      console.error("Failed to interrupt", e);
     }
   });
 
-  const activeThread = threads.find((thread) => thread.thread_id === selectedThreadId) ?? null;
-
   return (
-    <div className="console-shell">
-      <header className="hero-panel">
-        <div>
-          <p className="eyebrow">Copilot Console</p>
-          <h1>yi-min-ai Agent Atelier</h1>
-          <p className="hero-copy">
-            用 CopilotKit 承接对话体验，用 Python runtime 继续作为执行内核。左侧切 thread，中间看 agent，对右侧做审批。
-          </p>
+    <div className="app-shell">
+      <nav className="app-nav">
+        <div className="nav-section">
+          <button
+            className={`nav-btn${panelOpen ? " nav-btn--active" : ""}`}
+            onClick={() => setPanelOpen((v) => !v)}
+            title="会话列表"
+            type="button"
+          >
+            <IconSidebar />
+          </button>
+          <button className="nav-btn" onClick={onNewThread} title="新对话" type="button">
+            <IconCompose />
+          </button>
         </div>
-
-        <div className="hero-status-grid">
-          <article className={`status-card ${runState.active ? "live" : ""}`}>
-            <span>运行状态</span>
-            <strong>{runState.active ? "执行中" : "空闲"}</strong>
-            <small>{runState.runId ?? "等待下一次 run"}</small>
-          </article>
-          <article className="status-card">
-            <span>当前 Thread</span>
-            <strong>{selectedThreadId}</strong>
-            <small>{activeThread ? `${activeThread.message_count} 条消息` : "新线程"}</small>
-          </article>
-          <article className="status-card">
-            <span>审批状态</span>
-            <strong>{activeThread?.pending_approval ? "待处理" : "清爽"}</strong>
-            <small>{activeThread?.pending_approval ? "等待你的决策" : "没有挂起工具"}</small>
-          </article>
+        <div className="nav-section">
+          {runActive && <span className="nav-pulse" title="运行中" />}
         </div>
-      </header>
+      </nav>
 
-      <main className="workspace-grid">
+      <aside className={`thread-panel${panelOpen ? " thread-panel--open" : ""}`}>
         <ThreadSidebar
           activeThreadId={selectedThreadId}
           onNewThread={onNewThread}
@@ -132,77 +114,52 @@ function AppShell({
           setSearch={setSearch}
           threads={threads}
         />
+      </aside>
 
-        <section className="chat-stage">
-          <div className="panel-title-row chat-panel-header">
-            <div>
-              <p className="eyebrow">Agent Surface</p>
-              <h2>实时对话</h2>
-            </div>
-            {runState.error ? <span className="error-pill">{runState.error}</span> : null}
-          </div>
-
-          <div className="chat-shell">
-            <CopilotChat
-              labels={{
-                title: "yi-min-ai",
-                initial: "想让 Agent 帮你处理什么？",
-              }}
-              onStop={() => {
-                void handleStop();
-              }}
-            />
-          </div>
-        </section>
-
-        <aside className="inspector-rail">
-          <section className="context-card">
-            <p className="eyebrow">Thread Notes</p>
-            <h3>当前会话摘要</h3>
-            <p>{activeThread?.last_message || "这个 thread 还没有历史摘要，发送第一条消息后这里会自动刷新。"}</p>
-          </section>
-
-          {approvalElement ?? (
-            <section className="context-card muted-card">
-              <p className="eyebrow">Approval Deck</p>
-              <h3>当前没有挂起审批</h3>
-              <p>命中 `file_write` / `memory_write` 之类的受控工具时，这里会弹出可恢复的审批卡片。</p>
-            </section>
-          )}
-        </aside>
+      <main className="chat-main">
+        {runError && <div className="chat-error-bar">{runError}</div>}
+        <div className="chat-wrapper">
+          <CopilotChat
+            labels={{ welcomeMessageText: "有什么我可以帮你的？" }}
+            onStop={() => { void handleStop(); }}
+          />
+        </div>
       </main>
+
+      {approvalElement && (
+        <div className="approval-overlay">
+          <div className="approval-modal">
+            {approvalElement}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 export default function App() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [selectedThreadId, setSelectedThreadId] = useState<string>(() => {
-    return localStorage.getItem("yiminai.activeThreadId") || createThreadId();
-  });
+  const [selectedThreadId, setSelectedThreadId] = useState<string>(
+    () => localStorage.getItem("yiminai.activeThreadId") || createThreadId(),
+  );
   const baseUrl = window.location.origin;
 
   const baseAgent = useMemo(
-    () =>
-      new YiMinHttpAgent({
-        baseUrl,
-        threadId: selectedThreadId,
-      }),
+    () => new YiMinHttpAgent({ baseUrl, threadId: selectedThreadId }),
     [baseUrl],
   );
 
   const refreshThreads = useEffectEvent(async () => {
     try {
-      const nextThreads = await fetchThreads();
-      setThreads(nextThreads);
-    } catch (error) {
-      console.error("Failed to refresh threads", error);
+      setThreads(await fetchThreads());
+    } catch (e) {
+      console.error("Failed to refresh threads", e);
     }
   });
 
   useEffect(() => {
     void refreshThreads();
-  }, [refreshThreads]);
+  }, []);
 
   return (
     <CopilotKitProvider agents__unsafe_dev_only={{ default: baseAgent }}>
@@ -210,9 +167,7 @@ export default function App() {
         <AppShell
           onNewThread={() => setSelectedThreadId(createThreadId())}
           onSelectThread={setSelectedThreadId}
-          refreshThreads={() => {
-            void refreshThreads();
-          }}
+          refreshThreads={() => { void refreshThreads(); }}
           selectedThreadId={selectedThreadId}
           threads={threads}
         />
