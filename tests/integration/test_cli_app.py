@@ -86,7 +86,7 @@ def test_build_app_testing_mode_can_trigger_file_tool(tmp_path: Path) -> None:
 
     reply = app.handle_text("读取 notes.txt", session_id="cli:default")
 
-    assert reply == "已读取文件"
+    assert reply == "已处理工具结果"
     db = sqlite3.connect(workspace / "sessions.db")
     row_count = db.execute("select count(*) from sessions").fetchone()[0]
     assert row_count > 0

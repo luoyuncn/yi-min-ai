@@ -30,16 +30,58 @@ class AgentApplication:
     def handle_text(self, text: str, session_id: str) -> str:
         """把一段文本包装成标准消息，再交给核心循环处理。"""
 
-        message = NormalizedMessage(
+        return asyncio.run(self.handle_text_async(text, session_id=session_id))
+
+    async def handle_text_async(self, text: str, session_id: str, channel: str = "cli") -> str:
+        """给异步入口（例如 Web）提供同一套处理逻辑。"""
+
+        return await self.core.run(self._build_message(text, session_id=session_id, channel=channel))
+
+    async def stream_events(
+        self,
+        text: str,
+        session_id: str,
+        *,
+        sender: str = "web-user",
+        channel: str = "web",
+        metadata: dict | None = None,
+        runtime_control=None,
+        approval_store=None,
+    ):
+        """把一次文本输入转换成 runtime event 流。"""
+
+        message = self._build_message(
+            text,
+            session_id=session_id,
+            sender=sender,
+            channel=channel,
+            metadata=metadata,
+        )
+        async for event in self.core.run_events(
+            message,
+            runtime_control=runtime_control,
+            approval_store=approval_store,
+        ):
+            yield event
+
+    def _build_message(
+        self,
+        text: str,
+        *,
+        session_id: str,
+        sender: str = "cli-user",
+        channel: str = "cli",
+        metadata: dict | None = None,
+    ) -> NormalizedMessage:
+        return NormalizedMessage(
             message_id=str(uuid4()),
             session_id=session_id,
-            sender="cli-user",
+            sender=sender,
             body=text,
             attachments=[],
-            channel="cli",
-            metadata={},
+            channel=channel,
+            metadata=metadata or {},
         )
-        return asyncio.run(self.core.run(message))
 
 
 class _TestingProviderManager:
@@ -53,7 +95,7 @@ class _TestingProviderManager:
 
     async def call(self, request):
         if any(message["role"] == "tool" for message in request.messages):
-            return LLMResponse(type="text", text="已读取文件")
+            return LLMResponse(type="text", text="已处理工具结果")
 
         user_messages = [message["content"] for message in request.messages if message["role"] == "user"]
         latest_user = user_messages[-1] if user_messages else ""
@@ -62,6 +104,19 @@ class _TestingProviderManager:
             return LLMResponse(
                 type="tool_calls",
                 tool_calls=[{"id": "testing-tool-1", "name": "file_read", "input": {"path": path}}],
+            )
+        if latest_user.startswith("写入 "):
+            path = latest_user.split(maxsplit=1)[1]
+            return LLMResponse(
+                type="tool_calls",
+                text="准备写文件",
+                tool_calls=[
+                    {
+                        "id": "testing-tool-2",
+                        "name": "file_write",
+                        "input": {"path": path, "content": "hello from testing approval"},
+                    }
+                ],
             )
 
         return LLMResponse(type="text", text="测试模式响应")
@@ -84,12 +139,13 @@ def build_app(config_path: Path, testing: bool = False) -> AgentApplication:
     else:
         provider_manager = _build_provider_manager(settings)
 
+    session_archive = SessionArchive(workspace_dir / "sessions.db")
     core = AgentCore(
         workspace_dir=workspace_dir,
         provider_manager=provider_manager,
         always_on_memory=AlwaysOnMemory(workspace_dir / "SOUL.md", workspace_dir / "MEMORY.md"),
-        session_archive=SessionArchive(workspace_dir / "sessions.db"),
-        session_manager=SessionManager(workspace_dir / "sessions.db"),
+        session_archive=session_archive,
+        session_manager=SessionManager(workspace_dir / "sessions.db", archive=session_archive),
         skill_loader=SkillLoader(workspace_dir / "skills"),
         max_iterations=settings.agent.max_iterations,
         system_prompt=f"You are {settings.agent.name}.",

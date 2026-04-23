@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>yi-min-ai Agent Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f1e8;
+        --panel: #fffdf7;
+        --line: #d8cfbf;
+        --ink: #1e1c18;
+        --muted: #6b6558;
+        --accent: #1d5c4f;
+        --accent-soft: #dcece7;
+        --tool: #f0e4c5;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "PingFang SC", sans-serif;
+        background:
+          radial-gradient(circle at top left, #ece5d8 0, transparent 24%),
+          linear-gradient(180deg, #f6f2e9 0%, #efe8db 100%);
+        color: var(--ink);
+      }
+      .shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .hero {
+        margin-bottom: 18px;
+        padding: 18px 20px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 253, 247, 0.82);
+        backdrop-filter: blur(10px);
+      }
+      .hero h1 { margin: 0 0 8px; font-size: 28px; }
+      .hero p { margin: 0; color: var(--muted); }
+      .layout {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 16px;
+      }
+      .panel {
+        min-height: 520px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--panel);
+        overflow: hidden;
+        box-shadow: 0 20px 40px rgba(42, 37, 28, 0.06);
+      }
+      .panel-head {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(244, 241, 232, 0.85);
+        font-weight: 600;
+      }
+      .transcript, .timeline {
+        height: 420px;
+        overflow: auto;
+        padding: 16px;
+      }
+      .message, .event {
+        margin-bottom: 12px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+      }
+      .message.user { background: #faf0d8; }
+      .message.assistant { background: #eef6f3; }
+      .event.tool { background: var(--tool); }
+      .event.error { background: #ffe3df; }
+      .meta {
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .controls {
+        padding: 16px;
+        border-top: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+      input, textarea, button {
+        font: inherit;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+      }
+      input, textarea {
+        width: 100%;
+        padding: 12px;
+        background: #fffefb;
+      }
+      textarea { min-height: 88px; resize: vertical; }
+      button {
+        border: none;
+        background: var(--accent);
+        color: white;
+        padding: 12px 18px;
+        cursor: pointer;
+      }
+      .status {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <h1>yi-min-ai Agent Console</h1>
+        <p>一个面向 AG-UI 事件流的最小本地 Agent Web UI。</p>
+      </section>
+      <section class="layout">
+        <div class="panel">
+          <div class="panel-head">Conversation</div>
+          <div id="transcript" class="transcript"></div>
+          <div class="controls">
+            <div class="row">
+              <input id="thread-id" value="web:default" placeholder="thread id" />
+              <button id="send-btn">Send</button>
+            </div>
+            <textarea id="message-input" placeholder="输入消息，例如：读取 SOUL.md"></textarea>
+            <div id="status" class="status">Idle</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Agent Timeline</div>
+          <div id="timeline" class="timeline"></div>
+        </div>
+      </section>
+    </div>
+    <script>
+      const transcriptEl = document.getElementById("transcript");
+      const timelineEl = document.getElementById("timeline");
+      const threadIdEl = document.getElementById("thread-id");
+      const inputEl = document.getElementById("message-input");
+      const sendBtn = document.getElementById("send-btn");
+      const statusEl = document.getElementById("status");
+
+      let activeAssistant = null;
+
+      const addBlock = (target, role, title, body, extraClass = "") => {
+        const div = document.createElement("div");
+        div.className = `${target === transcriptEl ? "message" : "event"} ${role} ${extraClass}`.trim();
+        div.innerHTML = `<div class="meta">${title}</div><div>${body}</div>`;
+        target.appendChild(div);
+        target.scrollTop = target.scrollHeight;
+        return div;
+      };
+
+      const updateStatus = (text) => {
+        statusEl.textContent = text;
+      };
+
+      const handleEvent = (payload) => {
+        switch (payload.type) {
+          case "RUN_STARTED":
+            updateStatus(`Running ${payload.runId}`);
+            addBlock(timelineEl, "run", "Run Started", `thread=${payload.threadId}`);
+            break;
+          case "STEP_STARTED":
+            addBlock(timelineEl, "step", "Step Started", payload.stepName);
+            break;
+          case "TEXT_MESSAGE_START":
+            activeAssistant = addBlock(transcriptEl, "assistant", "Assistant", "");
+            break;
+          case "TEXT_MESSAGE_CONTENT":
+            if (!activeAssistant) {
+              activeAssistant = addBlock(transcriptEl, "assistant", "Assistant", "");
+            }
+            activeAssistant.lastElementChild.textContent += payload.delta;
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
+            break;
+          case "TEXT_MESSAGE_END":
+            activeAssistant = null;
+            break;
+          case "TOOL_CALL_START":
+            addBlock(timelineEl, "tool", "Tool Start", payload.toolCallName, "tool");
+            break;
+          case "TOOL_CALL_ARGS":
+            addBlock(timelineEl, "tool", "Tool Args", `<pre>${payload.delta}</pre>`, "tool");
+            break;
+          case "TOOL_CALL_RESULT":
+            addBlock(timelineEl, "tool", "Tool Result", `<pre>${payload.content}</pre>`, "tool");
+            break;
+          case "TOOL_CALL_END":
+            addBlock(timelineEl, "tool", "Tool End", payload.toolCallId, "tool");
+            break;
+          case "STEP_FINISHED":
+            addBlock(timelineEl, "step", "Step Finished", payload.stepName);
+            break;
+          case "RUN_FINISHED":
+            updateStatus("Completed");
+            addBlock(timelineEl, "run", "Run Finished", payload.runId);
+            break;
+          case "RUN_ERROR":
+            updateStatus("Error");
+            addBlock(timelineEl, "error", "Run Error", payload.message, "error");
+            break;
+        }
+      };
+
+      const parseSSE = async (response) => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          while (buffer.includes("\n\n")) {
+            const chunk = buffer.slice(0, buffer.indexOf("\n\n"));
+            buffer = buffer.slice(buffer.indexOf("\n\n") + 2);
+            const dataLines = chunk
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trim());
+            if (!dataLines.length) continue;
+            handleEvent(JSON.parse(dataLines.join("\n")));
+          }
+        }
+      };
+
+      const runAgent = async () => {
+        const text = inputEl.value.trim();
+        if (!text) return;
+
+        addBlock(transcriptEl, "user", "User", text);
+        activeAssistant = null;
+        updateStatus("Connecting...");
+
+        const response = await fetch(`/api/threads/${encodeURIComponent(threadIdEl.value)}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        await parseSSE(response);
+        inputEl.value = "";
+      };
+
+      sendBtn.addEventListener("click", runAgent);
+      inputEl.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          runAgent();
+        }
+      });
+    </script>
+  </body>
+</html>

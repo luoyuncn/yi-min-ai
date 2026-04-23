@@ -16,10 +16,15 @@ from agent.session.models import Session, SessionMetadata
 class SessionManager:
     """管理活跃会话的最小实现。"""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, archive=None) -> None:
         # `db_path` 这里先只是占位保留，方便后面阶段扩展到持久化恢复。
         self.db_path = Path(db_path)
         self._active_sessions: dict[str, Session] = {}
+        if archive is None:
+            from agent.memory.session_archive import SessionArchive
+
+            archive = SessionArchive(self.db_path)
+        self._archive = archive
 
     async def get_or_create(self, session_id: str, channel: str) -> Session:
         """按 session_id 获取或创建会话。
@@ -32,6 +37,12 @@ class SessionManager:
         if session is not None:
             session.metadata.last_active_at = datetime.now(UTC)
             return session
+
+        restored = self._archive.load_session(session_id)
+        if restored is not None:
+            restored.metadata.last_active_at = datetime.now(UTC)
+            self._active_sessions[session_id] = restored
+            return restored
 
         now = datetime.now(UTC)
         session = Session(

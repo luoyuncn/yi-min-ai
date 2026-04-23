@@ -151,6 +151,23 @@ venv.bak/
 # Runtime workspace databases
 workspace/*.db
 
+# Frontend local dependencies and built assets
+frontend/node_modules/
+agent/web/static/app/
+!frontend/src/lib/
+!frontend/src/lib/**
+
+# Local browser/tool scratch
+.tmp/
+.playwright-mcp/
+
+# Workspace runtime scratch files
+workspace/*
+!workspace/SOUL.md
+!workspace/MEMORY.md
+!workspace/skills/
+!workspace/skills/**
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -9,10 +9,13 @@ description = "Yi Min AI Assistant"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "ag-ui-protocol>=0.1.15",
   "anthropic>=0.51.0",
+  "fastapi>=0.115.0",
   "openai>=1.30.0",
   "python-dotenv>=1.0.1",
   "pyyaml>=6.0.2",
+  "uvicorn>=0.34.0",
 ]
 
 [dependency-groups]
@@ -28,5 +31,6 @@ testpaths = ["tests"]
 packages = ["agent"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"agent/web/static" = "agent/web/static"
 "config" = "config"
 "workspace" = "workspace"

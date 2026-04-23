@@ -4,9 +4,9 @@ Yi Min AI Assistant
 
 ## 当前状态
 
-当前项目已经完成阶段一可运行版本，定位是“本地单通道 CLI Agent 基座”。
+当前项目已经完成“阶段一 CLI 基座 + 本地 Web Agent Console 第二阶段”。
 
-阶段一已经具备的能力：
+当前已经具备的能力：
 
 - CLI 单通道对话入口
 - 配置加载与校验
@@ -15,10 +15,12 @@ Yi Min AI Assistant
 - Skill Loader
 - Always-On Memory：`SOUL.md` / `MEMORY.md`
 - SQLite 会话归档与全文检索
-- 简化版 Session Manager
+- Session 恢复与多线程切换基础
 - 测试模式下的完整可演示链路
+- 基于 CopilotKit 的本地 Web Agent Console
+- Web interrupt / approval / thread replay
 
-阶段一明确还没有做的内容：
+当前明确还没有做的内容：
 
 - 飞书 Adapter
 - Approval Flow
@@ -50,6 +52,7 @@ Yi Min AI Assistant
 
 - Python `3.12+`
 - `uv`
+- Node.js `24+`（如果你要重新构建 Web 前端）
 
 如果你还没有 `uv`，先安装它，再继续下面步骤。
 
@@ -117,6 +120,46 @@ exit
 - `你好` 可以得到普通文本回复
 - `读取 SOUL.md` 可以走一次工具调用链
 - 读取不存在的文件不会把进程打崩，而是被当作工具错误处理
+
+### 2.1 构建并启动本地 Web Agent UI
+
+如果你第一次拉起 Web UI，先构建前端：
+
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+如果你想在浏览器里验证 Agent 型交互，可以直接启动内置 Web 入口：
+
+```powershell
+uv run python -m agent.web.main --config config/agent.yaml --testing
+```
+
+然后在浏览器打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+当前这版 Web UI 提供：
+
+- CopilotKit 驱动的聊天界面
+- SQLite 线程历史恢复
+- 多 thread 切换
+- 工具调用流式展示
+- `file_write` / `memory_write` 的 approval 卡片
+- 运行中 interrupt / stop
+- 基于 AG-UI 事件流的 SSE 输出
+
+说明：
+
+- Web 前端源码在 `frontend/`
+- 构建产物输出到 `agent/web/static/app/`
+- 后端仍然是原来的 Python runtime，没有迁移到 LangGraph
+- 如果你改了前端代码，记得重新执行 `npm run build`
 
 ### 3. 检查 SQLite 是否已经落库
 
