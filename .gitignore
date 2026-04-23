@@ -144,6 +144,13 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local agent/editor state
+.claude/
+.omc/
+
+# Runtime workspace databases
+workspace/*.db
+
 # Spyder project settings
 .spyderproject
 .spyproject

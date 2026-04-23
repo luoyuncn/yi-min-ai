@@ -1,0 +1,8 @@
+agent:
+  name: "Yi Min"
+  workspace_dir: "../workspace"
+  max_iterations: 8
+
+providers:
+  config_file: "providers.yaml"
+  default_primary: "gpt-5"

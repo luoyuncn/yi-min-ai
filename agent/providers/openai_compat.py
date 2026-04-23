@@ -1,0 +1,157 @@
+"""OpenAI 兼容 Provider 适配器。
+
+支持任何实现了 OpenAI Chat Completions 接口的服务：
+OpenAI、Azure OpenAI、DeepSeek、Ollama、vLLM 等。
+
+通过 `base_url` 指向目标服务，`api_key_env` 指定密钥所在的环境变量名。
+"""
+
+import json
+import os
+from urllib.parse import urlsplit, urlunsplit
+
+from openai import AsyncOpenAI
+
+from agent.core.provider import LLMProvider, LLMRequest, LLMResponse
+
+
+class OpenAICompatProvider(LLMProvider):
+    """OpenAI Chat Completions 兼容协议的适配器。"""
+
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        self._client: AsyncOpenAI | None = None
+
+    async def initialize(self) -> None:
+        api_key = os.environ.get(self.config.api_key_env)
+        if not api_key:
+            raise ValueError(f"Missing API key: {self.config.api_key_env}")
+        kwargs = {"api_key": api_key}
+        if self.config.base_url:
+            kwargs["base_url"] = self._normalize_base_url(self.config.base_url)
+        self._client = AsyncOpenAI(**kwargs)
+
+    async def call(self, request: LLMRequest) -> LLMResponse:
+        kwargs = {
+            "model": self.config.model,
+            "messages": self._convert_messages(request.messages),
+            "max_tokens": request.max_tokens or self.config.max_output_tokens,
+        }
+        if request.tools:
+            kwargs["tools"] = self._convert_tools(request.tools)
+            kwargs["tool_choice"] = "auto"
+
+        response = await self._client.chat.completions.create(**kwargs)
+        return self._convert_response(response)
+
+    def _convert_messages(self, messages: list[dict]) -> list[dict]:
+        """把内部消息格式转换成 OpenAI messages 格式。
+
+        内部格式与 OpenAI 格式非常接近，主要差异在 tool_calls 的结构上。
+        """
+        converted = []
+        for message in messages:
+            role = message["role"]
+
+            if role == "assistant" and message.get("tool_calls"):
+                tool_calls = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["input"], ensure_ascii=False),
+                        },
+                    }
+                    for tc in message["tool_calls"]
+                ]
+                converted.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content") or None,
+                        "tool_calls": tool_calls,
+                    }
+                )
+                continue
+
+            if role == "tool":
+                converted.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": message["tool_call_id"],
+                        "content": message["content"],
+                    }
+                )
+                continue
+
+            converted.append({"role": role, "content": message["content"]})
+
+        return converted
+
+    def _convert_tools(self, tools: list[dict]) -> list[dict]:
+        """把统一 schema 转换成 OpenAI 工具定义格式。"""
+        return [
+            {
+                "type": "function",
+                "function": tool["function"],
+            }
+            for tool in tools
+        ]
+
+    def _convert_response(self, response) -> LLMResponse:
+        """把 OpenAI 响应转换成统一 LLMResponse。"""
+        if isinstance(response, str):
+            stripped = response.lstrip().lower()
+            if stripped.startswith("<!doctype html") or stripped.startswith("<html"):
+                raise ValueError(
+                    "OpenAI-compatible endpoint returned HTML instead of JSON. "
+                    "Check `base_url`; many gateways require a `/v1` suffix."
+                )
+            return LLMResponse(
+                type="text",
+                text=response,
+                provider=self.config.name,
+                model=self.config.model,
+            )
+
+        choice = response.choices[0]
+        message = choice.message
+
+        text = message.content or None
+        tool_calls: list[dict] = []
+
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    }
+                )
+
+        usage = {}
+        if getattr(response, "usage", None):
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+
+        response_type = "tool_calls" if tool_calls else "text"
+        return LLMResponse(
+            type=response_type,
+            text=text,
+            tool_calls=tool_calls or None,
+            provider=self.config.name,
+            model=self.config.model,
+            usage=usage,
+        )
+
+    def _normalize_base_url(self, base_url: str) -> str:
+        """把 bare host 形式的兼容端点规范成 OpenAI SDK 可用的 API 根路径。"""
+
+        parsed = urlsplit(base_url)
+        if parsed.path not in {"", "/"}:
+            return base_url.rstrip("/")
+
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
