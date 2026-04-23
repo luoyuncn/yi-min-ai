@@ -205,6 +205,7 @@ async def _build_provider_manager_async(settings) -> ProviderManager:
             model=primary_item.model,
             api_key_env=primary_item.api_key_env,
             base_url=primary_item.base_url,
+            extra_body=primary_item.extra_body,
         ),
         make_primary=True,
     )

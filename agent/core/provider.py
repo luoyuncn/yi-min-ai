@@ -18,6 +18,7 @@ class ProviderConfig:
     model: str
     api_key_env: str
     base_url: str | None = None
+    extra_body: dict[str, Any] | None = None
     max_output_tokens: int = 2048
 
 

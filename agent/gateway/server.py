@@ -193,6 +193,7 @@ class GatewayServer:
                     "",
                     status="👀 已收到，正在思考…",
                 )
+                mark_monotonic(metadata, "feishu_ack_sent_at")
                 last_patch_at = asyncio.get_running_loop().time()
                 last_patch_status = "👀 已收到，正在思考…"
                 last_patch_markdown = ""
@@ -206,6 +207,7 @@ class GatewayServer:
                     final_text += event.delta
                     if not streaming_logged:
                         streaming_logged = True
+                        mark_monotonic(metadata, "feishu_streaming_started_at")
                         logger.info(
                             f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
                             f"event=feishu_streaming_started after_ms={elapsed_ms(started_at)}"
@@ -237,6 +239,17 @@ class GatewayServer:
             logger.info(
                 f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
                 f"event=feishu_message_completed total_ms={elapsed_ms(started_at)} output_chars={len(final_text or '')}"
+            )
+            logger.info(
+                f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
+                f"event=feishu_timing_summary queue_wait_ms={elapsed_ms(metadata.get('queue_enqueued_at'), end=metadata.get('queue_dequeued_at'))} "
+                f"ack_ms={elapsed_ms(started_at, end=metadata.get('feishu_ack_sent_at'))} "
+                f"first_visible_token_ms={elapsed_ms(started_at, end=metadata.get('feishu_streaming_started_at'))} "
+                f"core_run_ms={elapsed_ms(metadata.get('run_started_at'), end=metadata.get('run_finished_at'))} "
+                f"model_total_ms={metadata.get('timing_model_ms_total', 0)} "
+                f"tool_exec_ms_total={metadata.get('timing_tool_exec_ms_total', 0)} "
+                f"tool_roundtrip_ms_total={metadata.get('timing_tool_roundtrip_ms_total', 0)} "
+                f"tool_call_count={metadata.get('timing_tool_call_count', 0)}"
             )
             return final_text
 

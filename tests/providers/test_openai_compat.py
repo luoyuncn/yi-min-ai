@@ -134,3 +134,93 @@ async def test_call_stream_yields_text_deltas_and_final_response(monkeypatch) ->
     assert final_chunk.response is not None
     assert final_chunk.response.text == "你好"
     assert final_chunk.response.usage == {"input_tokens": 3, "output_tokens": 2}
+
+
+@pytest.mark.asyncio
+async def test_call_stream_passes_extra_body_to_openai_compatible_endpoint(monkeypatch) -> None:
+    """兼容 Provider 应透传 provider 级 extra_body 给下游端点。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="qwen",
+            provider_type="openai",
+            model="qwen3.6-plus",
+            api_key_env="OPENAI_API_KEY",
+            extra_body={"enable_thinking": False},
+        )
+    )
+    await provider.initialize()
+
+    chunks = [
+        chunk
+        async for chunk in provider.call_stream(
+            LLMRequest(messages=[{"role": "user", "content": "你好"}])
+        )
+    ]
+
+    assert captured["extra_body"] == {"enable_thinking": False}
+    assert chunks[-1].type == "response"
+    assert chunks[-1].response is not None
+    assert chunks[-1].response.text is None
+
+
+@pytest.mark.asyncio
+async def test_call_stream_logs_provider_request_config_for_thinking_mode(monkeypatch, caplog) -> None:
+    """兼容 Provider 应记录关键请求配置，便于确认思考模式是否关闭。"""
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    caplog.set_level("INFO", logger="agent.providers.openai_compat")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="qwen",
+            provider_type="openai",
+            model="qwen3.6-plus",
+            api_key_env="OPENAI_API_KEY",
+            extra_body={"enable_thinking": False},
+        )
+    )
+    await provider.initialize()
+
+    async for _ in provider.call_stream(LLMRequest(messages=[{"role": "user", "content": "你好"}])):
+        pass
+
+    assert "event=provider_request_config" in caplog.text
+    assert "enable_thinking=False" in caplog.text

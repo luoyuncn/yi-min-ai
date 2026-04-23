@@ -131,3 +131,47 @@ def test_build_app_loads_api_key_from_root_dotenv(monkeypatch, tmp_path: Path) -
         os.chdir(original_cwd)
 
     assert captured["api_key"] == "dotenv-test-key"
+
+
+def test_build_provider_manager_passes_extra_body_to_primary_provider(monkeypatch, tmp_path: Path) -> None:
+    """primary provider 的 extra_body 应被装配到运行时 ProviderConfig。"""
+
+    captured: dict[str, object] = {}
+
+    class CapturingOpenAIProvider:
+        def __init__(self, config: ProviderConfig) -> None:
+            captured["extra_body"] = config.extra_body
+            self.config = config
+
+        async def initialize(self) -> None:
+            return None
+
+        async def call(self, request: LLMRequest) -> LLMResponse:
+            return LLMResponse(type="text", text="pong", provider=self.config.name, model=self.config.model)
+
+    monkeypatch.setattr(provider_manager_module, "OpenAICompatProvider", CapturingOpenAIProvider)
+
+    settings = Settings(
+        agent=AgentSettings(
+            name="Atlas",
+            workspace_dir=tmp_path / "workspace",
+            max_iterations=8,
+        ),
+        providers=ProviderSettings(
+            config_file=tmp_path / "providers.yaml",
+            default_primary="qwen",
+            items=[
+                ProviderConfigItem(
+                    name="qwen",
+                    provider_type="openai",
+                    model="qwen3.6-plus",
+                    api_key_env="OPENAI_API_KEY",
+                    extra_body={"enable_thinking": False},
+                ),
+            ],
+        ),
+    )
+
+    _build_provider_manager(settings)
+
+    assert captured["extra_body"] == {"enable_thinking": False}

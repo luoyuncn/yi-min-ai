@@ -153,3 +153,37 @@ def test_load_settings_wraps_invalid_yaml_in_config_error(tmp_path: Path) -> Non
 
     with pytest.raises(ConfigError, match="Invalid YAML"):
         load_settings(config_dir / "agent.yaml")
+
+
+def test_load_settings_parses_provider_extra_body(tmp_path: Path) -> None:
+    """Provider 可选的 extra_body 应能从 YAML 正确解析出来。"""
+
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Atlas\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: qwen\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: OPENAI_API_KEY\n"
+        "    extra_body:\n"
+        "      enable_thinking: false\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.providers.items[0].extra_body == {"enable_thinking": False}

@@ -108,6 +108,14 @@ class AgentCore:
         ensure_trace_id(metadata, fallback_id=message.message_id)
         run_started_at = monotonic_now()
         metadata["run_started_at"] = run_started_at
+        metadata["timing_model_ms_total"] = 0
+        metadata["timing_tool_exec_ms_total"] = 0
+        metadata["timing_tool_roundtrip_ms_total"] = 0
+        metadata["timing_tool_call_count"] = 0
+        metadata["timing_first_token_model_ms"] = None
+        metadata["timing_first_token_run_ms"] = None
+        metadata["timing_iterations"] = 0
+        metadata["run_finished_at"] = None
 
         logger.info(
             f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
@@ -191,6 +199,7 @@ class AgentCore:
     ):
         for index in range(self.max_iterations):
             step_name = f"iteration-{index + 1}"
+            message_metadata["timing_iterations"] = index + 1
             self._ensure_active(runtime_control)
             step_started_at = monotonic_now()
             yield StepStartedEvent(step_name=step_name)
@@ -228,9 +237,16 @@ class AgentCore:
                         continue
                     if not emitted_stream_start:
                         emitted_stream_start = True
+                        first_token_model_ms = elapsed_ms(model_started_at)
+                        if message_metadata.get("timing_first_token_model_ms") is None:
+                            message_metadata["timing_first_token_model_ms"] = first_token_model_ms
+                        if message_metadata.get("timing_first_token_run_ms") is None:
+                            message_metadata["timing_first_token_run_ms"] = elapsed_ms(
+                                message_metadata.get("run_started_at")
+                            )
                         logger.info(
                             f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
-                            f"event=model_first_token step_name={step_name} after_ms={elapsed_ms(model_started_at)}"
+                            f"event=model_first_token step_name={step_name} after_ms={first_token_model_ms}"
                         )
                         yield AssistantTextStartEvent(message_id=assistant_message_id)
                     streamed_text_parts.append(delta)
@@ -248,12 +264,16 @@ class AgentCore:
             finalized_text = self._finalize_streamed_text(streamed_text, response.text)
             if finalized_text != response.text:
                 response = self._coerce_response(response, text=finalized_text)
+            model_ms = elapsed_ms(model_started_at)
+            message_metadata["timing_model_ms_total"] += model_ms
+            usage = response.usage or {}
             logger.info(
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
-                f"event=model_response_completed step_name={step_name} after_ms={elapsed_ms(model_started_at)} "
+                f"event=model_response_completed step_name={step_name} after_ms={model_ms} "
                 f"response_type={response.type} provider={response.provider or 'unknown'} "
                 f"model={response.model or 'unknown'} output_chars={len((response.text or ''))} "
-                f"tool_call_count={len(response.tool_calls or [])} streamed_chars={len(streamed_text)}"
+                f"tool_call_count={len(response.tool_calls or [])} streamed_chars={len(streamed_text)} "
+                f"input_tokens={usage.get('input_tokens', -1)} output_tokens={usage.get('output_tokens', -1)}"
             )
             self._ensure_active(runtime_control)
             if response.type == "text":
@@ -264,6 +284,12 @@ class AgentCore:
                         yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=tail_delta)
                     yield AssistantTextEndEvent(message_id=assistant_message_id)
                 elif assistant_text:
+                    if message_metadata.get("timing_first_token_model_ms") is None:
+                        message_metadata["timing_first_token_model_ms"] = model_ms
+                    if message_metadata.get("timing_first_token_run_ms") is None:
+                        message_metadata["timing_first_token_run_ms"] = elapsed_ms(
+                            message_metadata.get("run_started_at")
+                        )
                     yield AssistantTextStartEvent(message_id=assistant_message_id)
                     yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=assistant_text)
                     yield AssistantTextEndEvent(message_id=assistant_message_id)
@@ -278,6 +304,13 @@ class AgentCore:
                     f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                     f"event=step_finished step_name={step_name} step_ms={elapsed_ms(step_started_at)}"
                 )
+                self._log_run_timing_summary(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    channel=channel,
+                    message_metadata=message_metadata,
+                )
+                message_metadata["run_finished_at"] = monotonic_now()
                 logger.info(
                     f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                     f"event=run_finished total_ms={elapsed_ms(message_metadata.get('run_started_at'))} "
@@ -329,6 +362,13 @@ class AgentCore:
                 f"event=step_finished step_name={step_name} step_ms={elapsed_ms(step_started_at)}"
             )
             if interrupted:
+                self._log_run_timing_summary(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    channel=channel,
+                    message_metadata=message_metadata,
+                )
+                message_metadata["run_finished_at"] = monotonic_now()
                 logger.info(
                     f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                     f"event=run_finished total_ms={elapsed_ms(message_metadata.get('run_started_at'))} result_chars=0"
@@ -390,6 +430,27 @@ class AgentCore:
     def _is_tool_failure_result(self, result: str) -> bool:
         return (result or "").startswith("Tool execution failed:")
 
+    def _log_run_timing_summary(
+        self,
+        *,
+        thread_id: str,
+        run_id: str,
+        channel: str,
+        message_metadata: dict,
+    ) -> None:
+        """输出一条更适合人工阅读的运行耗时汇总日志。"""
+
+        logger.info(
+            f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+            f"event=run_timing_summary iterations={message_metadata.get('timing_iterations', 0)} "
+            f"first_token_model_ms={message_metadata.get('timing_first_token_model_ms', -1)} "
+            f"first_token_run_ms={message_metadata.get('timing_first_token_run_ms', -1)} "
+            f"model_total_ms={message_metadata.get('timing_model_ms_total', 0)} "
+            f"tool_exec_ms_total={message_metadata.get('timing_tool_exec_ms_total', 0)} "
+            f"tool_roundtrip_ms_total={message_metadata.get('timing_tool_roundtrip_ms_total', 0)} "
+            f"tool_call_count={message_metadata.get('timing_tool_call_count', 0)}"
+        )
+
     async def _execute_tool_calls(
         self,
         session,
@@ -434,7 +495,7 @@ class AgentCore:
                 return
 
             args_json = json.dumps(tool_call["input"], ensure_ascii=False)
-            tool_started_at = monotonic_now()
+            tool_dispatch_started_at = monotonic_now()
             logger.info(
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=tool_execution_started step_name={step_name} tool_name={tool_call['name']} "
@@ -447,7 +508,13 @@ class AgentCore:
             )
             yield ToolCallArgsEvent(tool_call_id=tool_call["id"], delta=args_json)
 
+            tool_exec_started_at = monotonic_now()
             result = self.tool_executor.execute(tool_call["name"], tool_call["input"])
+            tool_exec_ms = elapsed_ms(tool_exec_started_at)
+            tool_roundtrip_ms = elapsed_ms(tool_dispatch_started_at)
+            message_metadata["timing_tool_exec_ms_total"] += tool_exec_ms
+            message_metadata["timing_tool_roundtrip_ms_total"] += tool_roundtrip_ms
+            message_metadata["timing_tool_call_count"] += 1
             tool_message_id = str(uuid4())
             tool_message = {
                 "id": tool_message_id,
@@ -464,7 +531,7 @@ class AgentCore:
             logger.info(
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=tool_execution_completed step_name={step_name} tool_name={tool_call['name']} "
-                f"tool_call_id={tool_call['id']} after_ms={elapsed_ms(tool_started_at)} "
+                f"tool_call_id={tool_call['id']} exec_ms={tool_exec_ms} roundtrip_ms={tool_roundtrip_ms} "
                 f"result_chars={len(result or '')} failed={self._is_tool_failure_result(result)}"
             )
             session.append(tool_message)

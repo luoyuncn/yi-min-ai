@@ -95,6 +95,17 @@ def _require_mapping(data: dict, key: str) -> dict:
     return value
 
 
+def _optional_mapping(data: dict, key: str) -> dict | None:
+    """读取可选映射字段，不存在时返回 None。"""
+
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError(f"{key} must be a mapping if provided")
+    return value
+
+
 def _require_str(data: dict, key: str, section: str) -> str:
     """要求某个字段必须是非空字符串。"""
 
@@ -136,4 +147,5 @@ def _build_provider_item(item: object, index: int) -> ProviderConfigItem:
         model=_require_str(item, "model", f"providers.providers[{index}]"),
         api_key_env=_require_str(item, "api_key_env", f"providers.providers[{index}]"),
         base_url=_optional_str(item, "base_url"),
+        extra_body=_optional_mapping(item, "extra_body"),
     )

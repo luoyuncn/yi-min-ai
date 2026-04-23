@@ -131,6 +131,7 @@ def test_agent_core_logs_timeline_for_model_and_tool_execution(tmp_path: Path, c
     assert "event=model_response_completed" in log_text
     assert "event=tool_execution_started" in log_text
     assert "event=tool_execution_completed" in log_text
+    assert "event=run_timing_summary" in log_text
     assert "event=run_finished" in log_text
 
 

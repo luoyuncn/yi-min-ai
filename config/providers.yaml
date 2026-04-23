@@ -20,3 +20,6 @@ providers:
     model: "qwen3.6-plus"
     api_key_env: "OPENAI_API_KEY"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # Qwen3.6-Plus 在百炼默认开启思考模式；这里显式关闭。
+    extra_body:
+      enable_thinking: false

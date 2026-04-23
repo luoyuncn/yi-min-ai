@@ -7,6 +7,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -31,6 +32,7 @@ class ProviderConfigItem:
     model: str
     api_key_env: str
     base_url: str | None = None
+    extra_body: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

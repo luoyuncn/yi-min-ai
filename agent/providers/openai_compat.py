@@ -7,12 +7,15 @@ OpenAI、Azure OpenAI、DeepSeek、Ollama、vLLM 等。
 """
 
 import json
+import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
 
 from openai import AsyncOpenAI
 
 from agent.core.provider import LLMProvider, LLMRequest, LLMResponse, LLMStreamChunk
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -33,6 +36,7 @@ class OpenAICompatProvider(LLMProvider):
 
     async def call(self, request: LLMRequest) -> LLMResponse:
         kwargs = self._build_request_kwargs(request)
+        self._log_request_config(kwargs, stream=False)
         response = await self._client.chat.completions.create(**kwargs)
         return self._convert_response(response)
 
@@ -41,6 +45,7 @@ class OpenAICompatProvider(LLMProvider):
 
         kwargs = self._build_request_kwargs(request)
         kwargs["stream"] = True
+        self._log_request_config(kwargs, stream=True)
         stream = await self._client.chat.completions.create(**kwargs)
 
         text_parts: list[str] = []
@@ -112,10 +117,25 @@ class OpenAICompatProvider(LLMProvider):
             "messages": self._convert_messages(request.messages),
             "max_tokens": request.max_tokens or self.config.max_output_tokens,
         }
+        if self.config.extra_body:
+            kwargs["extra_body"] = dict(self.config.extra_body)
         if request.tools:
             kwargs["tools"] = self._convert_tools(request.tools)
             kwargs["tool_choice"] = "auto"
         return kwargs
+
+    def _log_request_config(self, kwargs: dict, *, stream: bool) -> None:
+        """记录关键请求配置，便于排查兼容端点行为。"""
+
+        extra_body = kwargs.get("extra_body") or {}
+        enable_thinking = extra_body.get("enable_thinking")
+        logger.info(
+            "event=provider_request_config "
+            f"provider={self.config.name} model={self.config.model} stream={stream} "
+            f"message_count={len(kwargs.get('messages', []))} tool_count={len(kwargs.get('tools', []))} "
+            f"max_tokens={kwargs.get('max_tokens')} enable_thinking={enable_thinking} "
+            f"base_url={self.config.base_url or 'default'}"
+        )
 
     def _convert_messages(self, messages: list[dict]) -> list[dict]:
         """把内部消息格式转换成 OpenAI messages 格式。
