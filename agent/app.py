@@ -18,7 +18,7 @@ from agent.core.llm_factory import LLMFactory
 from agent.core.provider import LLMResponse
 from agent.core.provider_manager import ProviderManager
 from agent.gateway.normalizer import NormalizedMessage
-from agent.memory import AlwaysOnMemory, SessionArchive
+from agent.memory import AlwaysOnMemory, LedgerStore, NoteStore, SessionArchive
 from agent.memory.mflow_bridge import MflowBridge
 from agent.session import SessionManager
 from agent.skills import SkillLoader
@@ -190,14 +190,17 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
     except Exception as e:
         print(f"Warning: M-flow initialization failed: {e}")
 
-    session_archive = SessionArchive(workspace_dir / "sessions.db")
+    db_path = workspace_dir / "agent.db"
+    session_archive = SessionArchive(db_path)
     core = AgentCore(
         workspace_dir=workspace_dir,
         provider_manager=provider_manager,
         always_on_memory=AlwaysOnMemory(workspace_dir / "SOUL.md", workspace_dir / "MEMORY.md"),
         session_archive=session_archive,
-        session_manager=SessionManager(workspace_dir / "sessions.db", archive=session_archive),
+        session_manager=SessionManager(db_path, archive=session_archive),
         skill_loader=SkillLoader(workspace_dir / "skills"),
+        ledger_store=LedgerStore(db_path),
+        note_store=NoteStore(db_path),
         mflow_bridge=mflow_bridge,
         max_iterations=settings.agent.max_iterations,
         system_prompt=_build_system_prompt(settings.agent.name),
@@ -272,6 +275,53 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
         target = workspace_dir / filename
         if not target.exists():
             target.write_text(content, encoding="utf-8")
+    _ensure_default_skills(workspace_dir / "skills")
+
+
+def _ensure_default_skills(skills_dir: Path) -> None:
+    """确保新 workspace 自带基础业务 skill 模板。"""
+
+    defaults = {
+        "bookkeeping": (
+            "---\n"
+            "name: bookkeeping\n"
+            "description: Proactively use ledger tools for bookkeeping, ask follow-up questions, and commit only after required fields are complete.\n"
+            "---\n"
+            "# Bookkeeping\n"
+            "\n"
+            "- If the user expresses income, expense, reimbursement, transfer, budget, or asks for bookkeeping statistics, treat it as a bookkeeping workflow.\n"
+            "- Use `ledger_upsert_draft` to save any partially known ledger fields.\n"
+            "- Ask follow-up questions when direction, amount, or occurrence time is still unclear.\n"
+            "- Only call `ledger_commit_draft` after required fields are complete.\n"
+            "- Use `ledger_query_entries` and `ledger_summary` for reporting.\n"
+            "- Do not commit guessed values. Clarify ambiguity first.\n"
+            "- Prefer ledger tools over `memory_write` or arbitrary files for bookkeeping facts.\n"
+            "- Example triggers: `今天午饭 32`, `帮我记一笔报销 120`, `这个月餐饮花了多少`.\n"
+        ),
+        "note-taking": (
+            "---\n"
+            "name: note-taking\n"
+            "description: Proactively save explicit remember requests and durable user facts as structured notes.\n"
+            "---\n"
+            "# Note Taking\n"
+            "\n"
+            "- Always save when the user explicitly asks to remember something.\n"
+            "- Auto-save only durable facts such as preferences, plans, constraints, and contacts.\n"
+            "- Use `note_add` for new facts, `note_update` when a saved fact is corrected, and `note_search` before duplicating.\n"
+            "- Give a short acknowledgement for explicit saves and important long-lived notes.\n"
+            "- Search existing notes before creating a new one.\n"
+            "- Do not auto-save one-off small talk, temporary emotions, or weak guesses.\n"
+            "- Prefer note tools over `memory_write` when saving long-lived user facts.\n"
+            "- Example durable facts: `我乳糖不耐受`, `以后默认中文回答`, `我更喜欢美式`, `六月计划去日本`.\n"
+        ),
+    }
+
+    for skill_name, content in defaults.items():
+        target = skills_dir / skill_name / "SKILL.md"
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
 
 
 def _build_system_prompt(agent_name: str) -> str:
@@ -286,6 +336,14 @@ def _build_system_prompt(agent_name: str) -> str:
                 "When the user asks to record, summarize, or reason about time-sensitive facts "
                 "such as ledger entries, always anchor your answer to the current local date."
             ),
+            "[TOOL ROUTING POLICY]",
+            "Use ledger tools for bookkeeping requests involving income, expense, reimbursement, transfer, and spending summaries.",
+            "Ask follow-up questions before committing incomplete ledger entries.",
+            "Use note tools for long-lived user facts such as preferences, plans, constraints, profile facts, and important contacts.",
+            "Always save explicit remember requests as notes, and proactively save durable facts when confidence is high.",
+            "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
+            "Do not store bookkeeping or note facts in MEMORY.md or arbitrary files unless the user explicitly asks for that format.",
+            "Give a short acknowledgement for explicit saves and important automatic note saves; otherwise keep auto-save quiet.",
             f"Process boot local datetime: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
     )

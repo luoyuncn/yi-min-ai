@@ -186,6 +186,57 @@ async def test_call_stream_passes_extra_body_to_openai_compatible_endpoint(monke
 
 
 @pytest.mark.asyncio
+async def test_call_stream_passes_deepseek_thinking_config_to_openai_compatible_endpoint(
+    monkeypatch,
+) -> None:
+    """DeepSeek thinking 配置应按官方 extra_body 结构透传。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="deepseek",
+            provider_type="openai",
+            model="deepseek-v4-pro",
+            api_key_env="DEEPSEEK_API_KEY",
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+    )
+    await provider.initialize()
+
+    chunks = [
+        chunk
+        async for chunk in provider.call_stream(
+            LLMRequest(messages=[{"role": "user", "content": "你好"}])
+        )
+    ]
+
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert chunks[-1].type == "response"
+    assert chunks[-1].response is not None
+    assert chunks[-1].response.text is None
+
+
+@pytest.mark.asyncio
 async def test_call_stream_logs_provider_request_config_for_thinking_mode(monkeypatch, caplog) -> None:
     """兼容 Provider 应记录关键请求配置，便于确认思考模式是否关闭。"""
 
@@ -224,6 +275,49 @@ async def test_call_stream_logs_provider_request_config_for_thinking_mode(monkey
 
     assert "event=provider_request_config" in caplog.text
     assert "enable_thinking=False" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_call_stream_logs_provider_request_config_for_deepseek_thinking_type(
+    monkeypatch, caplog
+) -> None:
+    """兼容 Provider 应记录 DeepSeek thinking.type，便于排查参数是否生效。"""
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    caplog.set_level("INFO", logger="agent.providers.openai_compat")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="deepseek",
+            provider_type="openai",
+            model="deepseek-v4-pro",
+            api_key_env="DEEPSEEK_API_KEY",
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+    )
+    await provider.initialize()
+
+    async for _ in provider.call_stream(LLMRequest(messages=[{"role": "user", "content": "你好"}])):
+        pass
+
+    assert "event=provider_request_config" in caplog.text
+    assert "thinking_type=disabled" in caplog.text
 
 
 @pytest.mark.asyncio

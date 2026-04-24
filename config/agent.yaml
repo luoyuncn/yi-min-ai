@@ -5,7 +5,7 @@ agent:
 
 providers:
   config_file: "providers.yaml"
-  default_primary: "qwen"
+  default_primary: "deepseek"
 
 channels:
   instances:

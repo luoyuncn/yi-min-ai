@@ -17,7 +17,7 @@ from uuid import uuid4
 from agent.core.compaction import CompactionEngine
 from agent.core.context import ContextAssembler
 from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk
-from agent.memory import AlwaysOnMemory, SessionArchive, TurnData
+from agent.memory import AlwaysOnMemory, LedgerStore, NoteStore, SessionArchive, TurnData
 from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_now, text_preview, trace_fields
 from agent.session import SessionManager
 from agent.skills import SkillLoader
@@ -54,6 +54,8 @@ class AgentCore:
         session_archive: SessionArchive,
         session_manager: SessionManager,
         skill_loader: SkillLoader,
+        ledger_store: LedgerStore | None = None,
+        note_store: NoteStore | None = None,
         mflow_bridge=None,
         max_iterations: int = 8,
         system_prompt: str = "You are Atlas.",
@@ -66,8 +68,10 @@ class AgentCore:
         self.session_archive = session_archive
         self.session_manager = session_manager
         self.skill_loader = skill_loader
+        self.ledger_store = ledger_store
         self.mflow_bridge = mflow_bridge
         self.max_iterations = max_iterations
+        self.note_store = note_store
         self.context_assembler = ContextAssembler(system_prompt=system_prompt)
         self.compaction_engine = CompactionEngine(
             provider_manager=provider_manager,
@@ -79,6 +83,8 @@ class AgentCore:
             session_archive=self.session_archive,
             skill_loader=self.skill_loader,
             mflow_bridge=self.mflow_bridge,
+            ledger_store=self.ledger_store,
+            note_store=self.note_store,
         )
         self.tool_executor = ToolExecutor(self.tool_registry)
 
@@ -695,7 +701,9 @@ class AgentCore:
             workspace_dir=workspace,
             provider_manager=provider_manager,
             always_on_memory=AlwaysOnMemory(workspace / "SOUL.md", workspace / "MEMORY.md"),
-            session_archive=SessionArchive(workspace / "sessions.db"),
-            session_manager=SessionManager(workspace / "sessions.db"),
+            session_archive=SessionArchive(workspace / "agent.db"),
+            session_manager=SessionManager(workspace / "agent.db"),
             skill_loader=SkillLoader(workspace / "skills"),
+            ledger_store=LedgerStore(workspace / "agent.db"),
+            note_store=NoteStore(workspace / "agent.db"),
         )

@@ -27,3 +27,12 @@ providers:
     # Qwen3.6-Plus 在百炼默认开启思考模式；这里显式关闭。
     extra_body:
       enable_thinking: false
+  # Deepseek
+  - name: "deepseek"
+    type: "openai"
+    model: "deepseek-v4-pro"
+    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.deepseek.com/v1"
+    extra_body:
+      thinking:
+        type: disabled

@@ -39,6 +39,36 @@ def test_build_probe_config_disables_thinking_for_qwen() -> None:
     assert config.extra_body == {"enable_thinking": False}
 
 
+def test_build_probe_config_maps_thinking_override_for_deepseek() -> None:
+    """诊断脚本应把通用 thinking 开关映射为 DeepSeek 官方参数结构。"""
+
+    settings = Settings(
+        agent=AgentSettings(
+            name="Atlas",
+            workspace_dir=Path("/tmp/workspace"),
+            max_iterations=8,
+        ),
+        providers=ProviderSettings(
+            config_file=Path("/tmp/providers.yaml"),
+            default_primary="deepseek",
+            items=[
+                ProviderConfigItem(
+                    name="deepseek",
+                    provider_type="openai",
+                    model="deepseek-v4-pro",
+                    api_key_env="DEEPSEEK_API_KEY",
+                ),
+            ],
+        ),
+    )
+
+    disabled = build_probe_config(settings, provider_name="deepseek", thinking="off")
+    enabled = build_probe_config(settings, provider_name="deepseek", thinking="on")
+
+    assert disabled.extra_body == {"thinking": {"type": "disabled"}}
+    assert enabled.extra_body == {"thinking": {"type": "enabled"}}
+
+
 def test_build_probe_request_supports_request_level_overrides() -> None:
     """诊断脚本应支持单次请求覆盖公共生成参数。"""
 

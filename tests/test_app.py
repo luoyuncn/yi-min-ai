@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import agent.core.provider_manager as provider_manager_module
-from agent.app import _build_provider_manager, build_app, build_channel_apps_async
+from agent.app import _build_provider_manager, _build_system_prompt, build_app, build_channel_apps_async
 from agent.config.models import AgentSettings, ChannelInstanceSettings, ChannelSettings, ProviderConfigItem, ProviderSettings, Settings
 from agent.core.provider import LLMRequest, LLMResponse, ProviderConfig
 
@@ -271,3 +271,61 @@ def test_build_channel_apps_async_uses_runtime_workspace_overrides(tmp_path: Pat
     assert set(apps.keys()) == {"feishu-main", "feishu-ops"}
     assert apps["feishu-main"].core.workspace_dir == main_workspace.resolve()
     assert apps["feishu-ops"].core.workspace_dir == ops_workspace.resolve()
+
+
+def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path: Path) -> None:
+    """新 workspace 应自动提供记账和自动笔记 skill 模板。"""
+
+    config_dir = tmp_path / "config"
+    workspace = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Atlas\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    build_app(config_path=config_dir / "agent.yaml", testing=True)
+
+    bookkeeping_skill = workspace / "skills" / "bookkeeping" / "SKILL.md"
+    note_taking_skill = workspace / "skills" / "note-taking" / "SKILL.md"
+
+    assert bookkeeping_skill.exists()
+    assert note_taking_skill.exists()
+    bookkeeping_text = bookkeeping_skill.read_text(encoding="utf-8")
+    note_taking_text = note_taking_skill.read_text(encoding="utf-8")
+
+    assert "bookkeeping" in bookkeeping_text
+    assert "ledger_upsert_draft" in bookkeeping_text
+    assert "If the user expresses income, expense, reimbursement" in bookkeeping_text
+    assert "note-taking" in note_taking_text
+    assert "Always save when the user explicitly asks to remember something" in note_taking_text
+    assert "Search existing notes before creating a new one" in note_taking_text
+    assert "Do not auto-save one-off small talk" in note_taking_text
+
+
+def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> None:
+    """系统提示词应主动引导模型使用账本与长期笔记工具。"""
+
+    prompt = _build_system_prompt("Atlas")
+
+    assert "TOOL ROUTING POLICY" in prompt
+    assert "Use ledger tools for bookkeeping requests" in prompt
+    assert "Ask follow-up questions before committing incomplete ledger entries" in prompt
+    assert "Use note tools for long-lived user facts" in prompt
+    assert "Do not store bookkeeping or note facts in MEMORY.md" in prompt

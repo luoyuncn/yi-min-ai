@@ -137,12 +137,15 @@ class OpenAICompatProvider(LLMProvider):
 
         extra_body = kwargs.get("extra_body") or {}
         enable_thinking = extra_body.get("enable_thinking")
+        thinking = extra_body.get("thinking") or {}
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
         logger.info(
             "event=provider_request_config "
             f"provider={self.config.name} model={self.config.model} stream={stream} "
             f"message_count={len(kwargs.get('messages', []))} tool_count={len(kwargs.get('tools', []))} "
             f"max_tokens={kwargs.get('max_tokens')} temperature={kwargs.get('temperature')} "
             f"top_p={kwargs.get('top_p')} enable_thinking={enable_thinking} "
+            f"thinking_type={thinking_type} "
             f"base_url={self.config.base_url or 'default'}"
         )
 

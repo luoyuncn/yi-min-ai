@@ -35,7 +35,11 @@ class LLMFactory:
             cls._default_extra_body_for_model(resolved_model),
             provider_item.extra_body,
             extra_body,
-            enable_thinking=enable_thinking,
+        )
+        merged_extra_body = cls._apply_thinking_override(
+            resolved_model,
+            merged_extra_body,
+            enable_thinking,
         )
 
         return ProviderConfig(
@@ -83,13 +87,14 @@ class LLMFactory:
         normalized_model = model.strip().lower()
         if normalized_model.startswith("qwen3.6"):
             return {"enable_thinking": True}
+        if normalized_model.startswith("deepseek"):
+            return {"thinking": {"type": "disabled"}}
 
         return {}
 
     @staticmethod
     def _merge_extra_body(
         *extra_bodies: dict[str, Any] | None,
-        enable_thinking: bool | None,
     ) -> dict[str, Any] | None:
         """按优先级合并 extra_body。
 
@@ -97,7 +102,6 @@ class LLMFactory:
         - 模型默认值
         - 静态配置值
         - 运行时 extra_body
-        - 显式 enable_thinking 参数
         """
 
         merged: dict[str, Any] = {}
@@ -106,10 +110,31 @@ class LLMFactory:
                 continue
             merged.update(item)
 
-        if enable_thinking is not None:
-            merged["enable_thinking"] = enable_thinking
-
         if not merged:
             return None
 
+        return merged
+
+    @staticmethod
+    def _apply_thinking_override(
+        model: str,
+        extra_body: dict[str, Any] | None,
+        enable_thinking: bool | None,
+    ) -> dict[str, Any] | None:
+        """把统一 thinking 开关映射到不同模型族的兼容参数。"""
+
+        if enable_thinking is None:
+            return extra_body
+
+        merged = dict(extra_body or {})
+        normalized_model = model.strip().lower()
+
+        if normalized_model.startswith("deepseek"):
+            merged.pop("enable_thinking", None)
+            merged["thinking"] = {
+                "type": "enabled" if enable_thinking else "disabled",
+            }
+            return merged
+
+        merged["enable_thinking"] = enable_thinking
         return merged

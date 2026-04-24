@@ -21,6 +21,21 @@ def test_llm_factory_enables_thinking_by_default_for_qwen36_models() -> None:
     assert config.extra_body == {"enable_thinking": True}
 
 
+def test_llm_factory_disables_thinking_by_default_for_deepseek_models() -> None:
+    """DeepSeek 默认应显式关闭 thinking，减少不必要的推理耗时。"""
+
+    config = LLMFactory.create(
+        ProviderConfigItem(
+            name="deepseek",
+            provider_type="openai",
+            model="deepseek-v4-pro",
+            api_key_env="DEEPSEEK_API_KEY",
+        )
+    )
+
+    assert config.extra_body == {"thinking": {"type": "disabled"}}
+
+
 def test_llm_factory_prefers_config_and_runtime_over_model_defaults() -> None:
     """模型默认值应允许被静态配置和运行时参数逐层覆盖。"""
 
@@ -43,6 +58,22 @@ def test_llm_factory_prefers_config_and_runtime_over_model_defaults() -> None:
         "response_format": "json",
     }
     assert config.max_output_tokens == 4096
+
+
+def test_llm_factory_allows_deepseek_config_to_override_default_thinking_mode() -> None:
+    """DeepSeek 的默认 disabled 应允许被静态配置显式覆盖。"""
+
+    config = LLMFactory.create(
+        ProviderConfigItem(
+            name="deepseek",
+            provider_type="openai",
+            model="deepseek-v4-pro",
+            api_key_env="DEEPSEEK_API_KEY",
+            extra_body={"thinking": {"type": "enabled"}},
+        )
+    )
+
+    assert config.extra_body == {"thinking": {"type": "enabled"}}
 
 
 def test_llm_factory_can_build_primary_provider_from_settings() -> None:

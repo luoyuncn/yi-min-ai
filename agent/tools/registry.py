@@ -8,7 +8,15 @@ from functools import partial
 from pathlib import Path
 
 from agent.tools.builtin.file_ops import file_read, file_write
+from agent.tools.builtin.ledger_tools import (
+    ledger_commit_draft,
+    ledger_get_active_draft,
+    ledger_query_entries,
+    ledger_summary,
+    ledger_upsert_draft,
+)
 from agent.tools.builtin.memory_tools import memory_write, recall_memory
+from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.session_tools import read_skill, search_sessions
 from agent.tools.builtin.shell_tools import shell_exec
 from agent.tools.builtin.web_tools import web_search
@@ -48,6 +56,8 @@ def build_stage1_registry(
     session_archive,
     skill_loader,
     mflow_bridge=None,
+    ledger_store=None,
+    note_store=None,
     enable_shell: bool = False,
     enable_web_search: bool = True,
 ) -> ToolRegistry:
@@ -90,6 +100,88 @@ def build_stage1_registry(
     )
     registry.register(
         ToolDefinition(
+            name="ledger_upsert_draft",
+            description="Create or update the active ledger draft for one thread.",
+            schema=_schema(
+                "ledger_upsert_draft",
+                "Create or update one ledger draft",
+                {
+                    "thread_id": _string_field("Runtime-scoped thread id"),
+                    "source_message_id": _optional_string_field("Source message id"),
+                    "direction": _optional_string_field("income or expense"),
+                    "amount_cent": _optional_integer_field("Amount in cents"),
+                    "currency": _optional_string_field("Currency code, default CNY"),
+                    "category": _optional_string_field("Category such as meal or salary"),
+                    "occurred_at": _optional_string_field("Occurrence datetime in ISO 8601"),
+                    "merchant": _optional_string_field("Merchant or counterparty"),
+                    "note": _optional_string_field("Freeform note"),
+                    "missing_fields": _array_field("List of still-missing required fields"),
+                },
+                required=["thread_id"],
+            ),
+            handler=partial(ledger_upsert_draft, ledger_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="ledger_get_active_draft",
+            description="Read the active ledger draft for one thread.",
+            schema=_schema(
+                "ledger_get_active_draft",
+                "Read one ledger draft",
+                {"thread_id": _string_field("Runtime-scoped thread id")},
+            ),
+            handler=partial(ledger_get_active_draft, ledger_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="ledger_commit_draft",
+            description="Commit a complete ledger draft into the ledger.",
+            schema=_schema(
+                "ledger_commit_draft",
+                "Commit one ledger draft",
+                {"thread_id": _string_field("Runtime-scoped thread id")},
+            ),
+            handler=partial(ledger_commit_draft, ledger_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="ledger_query_entries",
+            description="Query committed ledger entries.",
+            schema=_schema(
+                "ledger_query_entries",
+                "Query ledger entries",
+                {
+                    "direction": _optional_string_field("income or expense"),
+                    "category": _optional_string_field("Category filter"),
+                    "source_thread_id": _optional_string_field("Optional source thread filter"),
+                    "limit": _integer_field("Result limit"),
+                },
+                required=["limit"],
+            ),
+            handler=partial(ledger_query_entries, ledger_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="ledger_summary",
+            description="Summarize committed ledger entries.",
+            schema=_schema(
+                "ledger_summary",
+                "Summarize ledger entries",
+                {
+                    "category": _optional_string_field("Category filter"),
+                    "source_thread_id": _optional_string_field("Optional source thread filter"),
+                },
+                required=[],
+            ),
+            handler=partial(ledger_summary, ledger_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
             name="memory_write",
             description="Replace MEMORY.md content for the next turn.",
             schema=_schema("memory_write", "Replace MEMORY.md", {"content": _string_field("Memory content")}),
@@ -108,6 +200,72 @@ def build_stage1_registry(
             handler=partial(search_sessions, session_archive),
         )
     )
+    registry.register(
+        ToolDefinition(
+            name="note_add",
+            description="Create one long-lived note.",
+            schema=_schema(
+                "note_add",
+                "Create one note",
+                {
+                    "note_type": _string_field("Note type such as preference or plan"),
+                    "title": _string_field("Short note title"),
+                    "content": _string_field("Full note content"),
+                    "importance": _string_field("low, medium, or high"),
+                    "is_user_explicit": _boolean_field("Whether the user explicitly asked to save it"),
+                    "source_message_id": _optional_string_field("Source message id"),
+                    "source_thread_id": _optional_string_field("Source thread id"),
+                },
+                required=["note_type", "title", "content", "importance", "is_user_explicit"],
+            ),
+            handler=partial(note_add, note_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="note_search",
+            description="Search saved long-lived notes.",
+            schema=_schema(
+                "note_search",
+                "Search notes",
+                {
+                    "query": _string_field("Search query"),
+                    "limit": _integer_field("Result limit"),
+                },
+            ),
+            handler=partial(note_search, note_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="note_list_recent",
+            description="List the most recently updated notes.",
+            schema=_schema(
+                "note_list_recent",
+                "List recent notes",
+                {"limit": _integer_field("Result limit")},
+            ),
+            handler=partial(note_list_recent, note_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="note_update",
+            description="Update an existing note in place.",
+            schema=_schema(
+                "note_update",
+                "Update one note",
+                {
+                    "note_id": _string_field("Existing note id"),
+                    "title": _string_field("Updated title"),
+                    "content": _string_field("Updated content"),
+                    "importance": _string_field("Updated importance"),
+                },
+            ),
+            handler=partial(note_update, note_store),
+        )
+    )
+
     registry.register(
         ToolDefinition(
             name="read_skill",
@@ -184,7 +342,7 @@ def build_stage1_registry(
     return registry
 
 
-def _schema(name: str, description: str, properties: dict) -> dict:
+def _schema(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
     """构造统一的 function-call schema。"""
 
     return {
@@ -195,7 +353,7 @@ def _schema(name: str, description: str, properties: dict) -> dict:
             "parameters": {
                 "type": "object",
                 "properties": properties,
-                "required": list(properties.keys()),
+                "required": required if required is not None else list(properties.keys()),
                 "additionalProperties": False,
             },
         },
@@ -212,3 +370,19 @@ def _integer_field(description: str) -> dict:
     """整数字段 schema。"""
 
     return {"type": "integer", "description": description}
+
+
+def _optional_string_field(description: str) -> dict:
+    return {"type": ["string", "null"], "description": description}
+
+
+def _optional_integer_field(description: str) -> dict:
+    return {"type": ["integer", "null"], "description": description}
+
+
+def _boolean_field(description: str) -> dict:
+    return {"type": "boolean", "description": description}
+
+
+def _array_field(description: str) -> dict:
+    return {"type": "array", "items": {"type": "string"}, "description": description}
