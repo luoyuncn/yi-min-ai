@@ -4,27 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from agent.deploy.linux import (
-    build_journalctl_command,
-    build_systemctl_command,
-    render_system_service,
-    render_user_service,
-)
+from agent.deploy.linux import build_journalctl_command, build_systemctl_command, render_system_service, render_user_service
 
 
-def test_render_user_service_points_to_repo_venv_and_external_runtime_dir(tmp_path: Path) -> None:
+def test_render_user_service_keeps_runtime_inside_repo(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    data_root = tmp_path / "state"
     repo_root.mkdir()
 
     rendered = render_user_service(
         repo_root=repo_root,
-        data_root=data_root,
         config_path=repo_root / "config" / "agent.linux.yaml",
     )
 
     assert f"WorkingDirectory={repo_root}" in rendered
-    assert f"Environment=YIMIN_DATA_ROOT={data_root}" in rendered
+    assert "Environment=YIMIN_DATA_ROOT=" not in rendered
     assert (
         f"ExecStart={repo_root / 'scripts' / 'run_linux_service.sh'} "
         f"{repo_root / 'config' / 'agent.linux.yaml'}"
@@ -39,12 +32,10 @@ def test_systemd_commands_use_user_scope_and_service_name() -> None:
 
 def test_render_system_service_runs_as_target_user_and_targets_multi_user(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    data_root = tmp_path / "state"
     repo_root.mkdir()
 
     rendered = render_system_service(
         repo_root=repo_root,
-        data_root=data_root,
         service_user="shiyi",
         service_group="shiyi",
     )
@@ -52,7 +43,7 @@ def test_render_system_service_runs_as_target_user_and_targets_multi_user(tmp_pa
     assert "User=shiyi" in rendered
     assert "Group=shiyi" in rendered
     assert "WantedBy=multi-user.target" in rendered
-    assert f"Environment=YIMIN_DATA_ROOT={data_root}" in rendered
+    assert "Environment=YIMIN_DATA_ROOT=" not in rendered
     assert (
         f"ExecStart={repo_root / 'scripts' / 'run_linux_service.sh'} "
         f"{repo_root / 'config' / 'agent.linux.yaml'}"
@@ -100,3 +91,12 @@ def test_run_linux_service_script_prefers_repo_venv_python() -> None:
     assert '$REPO_ROOT/.venv/bin/python' in script_text
     assert 'exec "$REPO_ROOT/.venv/bin/python" -m agent.main --config "$CONFIG_PATH"' in script_text
     assert 'exec uv run python -m agent.main --config "$CONFIG_PATH"' in script_text
+
+
+def test_linux_agent_config_keeps_all_workspaces_inside_repo() -> None:
+    config_text = Path("config/agent.linux.yaml").read_text(encoding="utf-8")
+
+    assert 'workspace_dir: "../workspace"' in config_text
+    assert 'workspace_dir: "../workspace-main"' in config_text
+    assert 'workspace_dir: "../workspace-ops"' in config_text
+    assert "YIMIN_DATA_ROOT" not in config_text

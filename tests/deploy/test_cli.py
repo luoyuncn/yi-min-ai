@@ -23,3 +23,12 @@ def test_cmd_service_action_returns_systemctl_status_without_python_traceback(mo
     assert excinfo.value.code == 3
     assert captured["command"] == ["systemctl", "status", "yimin", "--no-pager"]
     assert captured["check"] is True
+
+
+def test_install_command_no_longer_accepts_data_root_override() -> None:
+    parser = cli_module.build_parser()
+
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["install", "--data-root", "/tmp/state"])
+
+    assert excinfo.value.code == 2

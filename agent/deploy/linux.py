@@ -23,17 +23,6 @@ def _normalize_scope(scope: str) -> str:
     return scope
 
 
-def default_data_root(*, scope: str = USER_SCOPE, home: Path | None = None) -> Path:
-    """返回指定 scope 的默认数据根目录。"""
-
-    scope = _normalize_scope(scope)
-    if scope == SYSTEM_SCOPE:
-        return Path("/var/lib/yi-min-ai")
-
-    base = home or Path.home()
-    return (base / ".local" / "share" / "yi-min-ai").resolve()
-
-
 def default_service_dir(*, scope: str = USER_SCOPE, home: Path | None = None) -> Path:
     """返回指定 scope 的 systemd service 目录。"""
 
@@ -59,7 +48,6 @@ def default_service_path(
 def _render_service(
     *,
     repo_root: Path,
-    data_root: Path,
     config_path: Path | None,
     python_executable: Path | None,
     service_name: str,
@@ -68,7 +56,6 @@ def _render_service(
     service_group: str | None = None,
 ) -> str:
     repo_root = repo_root.resolve()
-    data_root = data_root.resolve()
     config_path = (config_path or repo_root / "config" / "agent.linux.yaml").resolve()
     launcher_script = (repo_root / "scripts" / "run_linux_service.sh").resolve()
 
@@ -87,7 +74,6 @@ def _render_service(
         "[Service]",
         "Type=simple",
         f"WorkingDirectory={repo_root}",
-        f"Environment=YIMIN_DATA_ROOT={data_root}",
         f"EnvironmentFile=-{repo_root / '.env'}",
         f"ExecStart={exec_start}",
         "Restart=always",
@@ -116,7 +102,6 @@ def _render_service(
 def render_user_service(
     *,
     repo_root: Path,
-    data_root: Path,
     config_path: Path | None = None,
     python_executable: Path | None = None,
     service_name: str = DEFAULT_SERVICE_NAME,
@@ -125,7 +110,6 @@ def render_user_service(
 
     return _render_service(
         repo_root=repo_root,
-        data_root=data_root,
         config_path=config_path,
         python_executable=python_executable,
         service_name=service_name,
@@ -136,7 +120,6 @@ def render_user_service(
 def render_system_service(
     *,
     repo_root: Path,
-    data_root: Path,
     service_user: str,
     service_group: str | None = None,
     config_path: Path | None = None,
@@ -147,7 +130,6 @@ def render_system_service(
 
     return _render_service(
         repo_root=repo_root,
-        data_root=data_root,
         config_path=config_path,
         python_executable=python_executable,
         service_name=service_name,

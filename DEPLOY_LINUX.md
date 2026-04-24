@@ -115,35 +115,19 @@ sudo ./scripts/yimin install --scope system --service-user "$USER"
 
 ## 4. 数据目录
 
-Linux 部署默认使用外部数据目录。
-
-用户态默认：
+Linux 部署固定把运行态数据写在当前仓库目录里：
 
 ```text
-~/.local/share/yi-min-ai
+./workspace
+./workspace-main
+./workspace-ops
 ```
 
-system 级默认：
+其中：
 
-```text
-/var/lib/yi-min-ai
-```
-
-如果你想改位置，先设置：
-
-```bash
-export YIMIN_DATA_ROOT=/data/yi-min-ai
-```
-
-然后再执行安装命令。
-
-`config/agent.linux.yaml` 会把：
-
-- 默认 workspace
-- `feishu-main`
-- `feishu-ops`
-
-都映射到 `YIMIN_DATA_ROOT` 下的独立子目录。
+- `workspace/` 用于基础日志、默认 workspace 文件和主进程锁文件
+- `workspace-main/` 对应 `feishu-main`
+- `workspace-ops/` 对应 `feishu-ops`
 
 ## 5. 为什么这样更安全
 
@@ -206,4 +190,5 @@ loginctl enable-linger "$USER"
 - 生产建议用 `config/agent.linux.yaml`
 - `sudo ./scripts/install_linux.sh` 会自动尝试把 `uv sync` 退回到原调用用户执行，避免把仓库和 `.venv` 改成 root 所有
 - `sudo ./scripts/install_linux.sh` 现在会显式透传常用的 `UV_*` 下载参数，便于镜像、证书和索引策略在 `sudo -u` 场景下继续生效
+- Linux service 不再依赖 `YIMIN_DATA_ROOT` 之类的路径环境变量，运行态目录固定在当前仓库下
 - 当前多 runtime 模式下，Heartbeat / Cron 仍会自动禁用，这是现阶段实现限制

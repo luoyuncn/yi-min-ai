@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +15,6 @@ from agent.deploy.linux import (
     build_daemon_reload_command,
     build_journalctl_command,
     build_systemctl_command,
-    default_data_root,
     default_scope,
     default_service_path,
     render_system_service,
@@ -54,7 +52,6 @@ def _resolve_service_identity(args: argparse.Namespace, scope: str) -> tuple[str
 
 def _write_service_file(
     service_name: str,
-    data_root: Path,
     *,
     scope: str,
     service_user: str | None = None,
@@ -63,14 +60,11 @@ def _write_service_file(
     repo_root = _repo_root()
     service_path = default_service_path(service_name=service_name, scope=scope)
     service_path.parent.mkdir(parents=True, exist_ok=True)
-    data_root.mkdir(parents=True, exist_ok=True)
     if scope == SYSTEM_SCOPE:
         if service_user is None:
             raise SystemExit("System-scope service install requires a service user.")
-        shutil.chown(data_root, user=service_user, group=service_group or service_user)
         rendered = render_system_service(
             repo_root=repo_root,
-            data_root=data_root,
             service_user=service_user,
             service_group=service_group,
             config_path=repo_root / "config" / "agent.linux.yaml",
@@ -79,7 +73,6 @@ def _write_service_file(
     else:
         rendered = render_user_service(
             repo_root=repo_root,
-            data_root=data_root,
             config_path=repo_root / "config" / "agent.linux.yaml",
             service_name=service_name,
         )
@@ -90,12 +83,10 @@ def _write_service_file(
 def _cmd_install(args: argparse.Namespace) -> None:
     _require_linux()
     scope = _effective_scope(args.scope)
-    data_root = (args.data_root or default_data_root(scope=scope)).resolve()
     service_user, service_group = _resolve_service_identity(args, scope)
 
     service_path = _write_service_file(
         args.service_name,
-        data_root,
         scope=scope,
         service_user=service_user,
         service_group=service_group,
@@ -108,7 +99,7 @@ def _cmd_install(args: argparse.Namespace) -> None:
 
     print(f"Service installed: {service_path}")
     print(f"Scope: {scope}")
-    print(f"Data root: {data_root}")
+    print(f"Runtime paths: {_repo_root()}")
     if scope == SYSTEM_SCOPE:
         print(f"Service user: {service_user}")
     else:
@@ -170,12 +161,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     install = subparsers.add_parser("install", help="Install a systemd service for Yi Min")
     _add_scope_argument(install)
-    install.add_argument(
-        "--data-root",
-        type=Path,
-        default=None,
-        help="External runtime data directory. Defaults depend on scope.",
-    )
     install.add_argument("--service-name", default=DEFAULT_SERVICE_NAME)
     install.add_argument("--service-user", help="System-scope only: Unix user that should run the service.")
     install.add_argument("--service-group", help="System-scope only: Unix group for the service user.")
