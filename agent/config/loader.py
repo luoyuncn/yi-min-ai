@@ -69,14 +69,12 @@ def load_settings(agent_config_path: Path) -> Settings:
     if default_primary not in provider_names:
         raise ConfigError("providers.default_primary must match a configured provider name")
 
+    channels = _build_channel_settings(_optional_mapping(raw, "channels"), config_dir)
+
     return Settings(
         agent=AgentSettings(
             name=_require_str(agent_section, "name", "agent"),
-            workspace_dir=_resolve_path(
-                config_dir,
-                _require_str(agent_section, "workspace_dir", "agent"),
-                field_name="agent.workspace_dir",
-            ),
+            workspace_dir=_resolve_agent_workspace_dir(agent_section, config_dir=config_dir, channels=channels),
             max_iterations=_require_int(agent_section, "max_iterations", "agent"),
         ),
         providers=ProviderSettings(
@@ -84,7 +82,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             default_primary=default_primary,
             items=provider_items,
         ),
-        channels=_build_channel_settings(_optional_mapping(raw, "channels"), config_dir),
+        channels=channels,
         mflow=_build_mflow_settings(
             _optional_mapping(raw, "mflow"),
             config_dir=config_dir,
@@ -274,6 +272,32 @@ def _build_channel_instance(item: object, index: int, config_dir: Path) -> Chann
         ),
         app_id_env=_optional_str(item, "app_id_env"),
         app_secret_env=_optional_str(item, "app_secret_env"),
+    )
+
+
+def _resolve_agent_workspace_dir(
+    agent_section: dict,
+    *,
+    config_dir: Path,
+    channels: ChannelSettings | None,
+) -> Path:
+    """解析入口层基础工作区。
+
+    当配置了 channels.instances 时，以第一个 instance 的 workspace 作为基础工作区；
+    这会让 gateway 日志、锁文件等宿主运行态与实例空间保持一致，而不是额外生成独立 workspace。
+    """
+
+    if channels is not None and channels.instances:
+        return channels.instances[0].workspace_dir
+
+    workspace_dir = _optional_str(agent_section, "workspace_dir")
+    if workspace_dir is None:
+        raise ConfigError("agent.workspace_dir must be a non-empty string")
+
+    return _resolve_path(
+        config_dir,
+        workspace_dir,
+        field_name="agent.workspace_dir",
     )
 
 

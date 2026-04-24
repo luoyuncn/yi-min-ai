@@ -1,6 +1,5 @@
 agent:
   name: "Yi Min"
-  workspace_dir: "../workspace"
   max_iterations: 8
 
 providers:
@@ -43,6 +42,6 @@ channels:
 
     - name: "feishu-ops"
       type: "feishu"
-      workspace_dir: "../workspace-min"
+      workspace_dir: "../workspace-ops"
       app_id_env: "FEISHU_MIN_APP_ID"
       app_secret_env: "FEISHU_MIN_APP_SECRET"

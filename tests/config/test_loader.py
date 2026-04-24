@@ -278,6 +278,92 @@ def test_load_settings_parses_channel_instances_with_independent_workspaces(tmp_
     assert settings.channels.instances[1].workspace_dir == channel_b_workspace.resolve()
 
 
+def test_load_settings_uses_first_channel_workspace_as_base_workspace(tmp_path: Path) -> None:
+    """配置了 channels.instances 时，不应再保留独立默认 workspace。"""
+
+    config_dir = tmp_path / "config"
+    default_workspace = tmp_path / "workspace"
+    channel_a_workspace = tmp_path / "workspace-main"
+    channel_b_workspace = tmp_path / "workspace-ops"
+    config_dir.mkdir()
+    default_workspace.mkdir()
+    channel_a_workspace.mkdir()
+    channel_b_workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "channels:\n"
+        "  instances:\n"
+        "    - name: feishu-main\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-main\n"
+        "      app_id_env: FEISHU_MAIN_APP_ID\n"
+        "      app_secret_env: FEISHU_MAIN_APP_SECRET\n"
+        "    - name: feishu-ops\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-ops\n"
+        "      app_id_env: FEISHU_OPS_APP_ID\n"
+        "      app_secret_env: FEISHU_OPS_APP_SECRET\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.agent.workspace_dir == channel_a_workspace.resolve()
+
+
+def test_load_settings_allows_omitting_agent_workspace_when_channels_exist(tmp_path: Path) -> None:
+    """只要声明了 channels.instances，就不该强制要求独立默认 workspace。"""
+
+    config_dir = tmp_path / "config"
+    channel_a_workspace = tmp_path / "workspace-main"
+    config_dir.mkdir()
+    channel_a_workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "channels:\n"
+        "  instances:\n"
+        "    - name: feishu-main\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-main\n"
+        "      app_id_env: FEISHU_MAIN_APP_ID\n"
+        "      app_secret_env: FEISHU_MAIN_APP_SECRET\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.agent.workspace_dir == channel_a_workspace.resolve()
+
+
 def test_load_settings_parses_mflow_embedding_configuration(tmp_path: Path) -> None:
     """M-flow 配置应能独立解析，并支持 embedding provider 引用。"""
 

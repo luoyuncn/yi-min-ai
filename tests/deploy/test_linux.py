@@ -96,7 +96,7 @@ def test_run_linux_service_script_prefers_repo_venv_python() -> None:
 def test_linux_agent_config_keeps_all_workspaces_inside_repo() -> None:
     config_text = Path("config/agent.linux.yaml").read_text(encoding="utf-8")
 
-    assert 'workspace_dir: "../workspace"' in config_text
+    assert 'workspace_dir: "../workspace"' not in config_text
     assert 'workspace_dir: "../workspace-main"' in config_text
     assert 'workspace_dir: "../workspace-ops"' in config_text
     assert "YIMIN_DATA_ROOT" not in config_text

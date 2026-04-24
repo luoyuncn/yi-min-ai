@@ -78,9 +78,9 @@ uv run pytest -v
 ## 配置文件
 
 - `config/agent.yaml`
-  用于本地开发，默认 workspace 在仓库目录下。
+  用于本地开发，工作空间由 `channels.instances[*].workspace_dir` 决定。
 - `config/agent.linux.yaml`
-  用于 Linux 常驻部署，运行数据固定写到当前仓库里的 workspace 目录。
+  用于 Linux 常驻部署，运行数据固定写到当前仓库里的 instance workspace 目录。
 - `config/providers.yaml`
   管理 provider 列表、模型名、`api_key_env`、`base_url` 等。
 
@@ -115,14 +115,13 @@ mflow:
 
 运行态数据现在按下面的原则处理：
 
-- `workspace/`、`workspace-main/`、`workspace-ops/` 不进入 Git
+- `workspace-main/`、`workspace-ops/` 不进入 Git
 - 本地数据库、日志、M-flow 数据、运行期 skill 都不会上传到远端
-- Linux 部署和本地开发都把运行态文件固定在当前仓库目录里
+- Linux 部署和本地开发都把运行态文件固定在当前仓库目录里的各 instance workspace 下
 
 如果你在 Linux 上用 `config/agent.linux.yaml`，默认会使用这些项目内目录：
 
 ```text
-./workspace
 ./workspace-main
 ./workspace-ops
 ```
@@ -162,7 +161,7 @@ yimin logs
 - 普通用户执行时：安装 `systemd --user` 服务到 `~/.config/systemd/user/yimin.service`
 - `sudo ./scripts/install_linux.sh` 时：安装 system 级服务到 `/etc/systemd/system/yimin.service`
 - 启动命令都使用 `config/agent.linux.yaml`
-- 运行态数据固定写到仓库内的 `workspace/`、`workspace-main/`、`workspace-ops/`
+- 运行态数据固定写到仓库内各实例自己的 `workspace-main/`、`workspace-ops/`
 
 如果你使用的是用户态 service，并且希望退出登录后继续运行，执行一次：
 
