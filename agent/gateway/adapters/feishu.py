@@ -22,9 +22,11 @@ class FeishuAdapter:
     - 支持富文本消息卡片
     """
 
-    def __init__(self, app_id: str, app_secret: str):
+    def __init__(self, app_id: str, app_secret: str, *, adapter_id: str = "feishu"):
         self.app_id = app_id
         self.app_secret = app_secret
+        self.adapter_id = adapter_id
+        self.channel_type = "feishu"
         self._message_queue: asyncio.Queue[NormalizedMessage] = asyncio.Queue()
         self._lark_client = None
         self._ws_client = None
@@ -183,10 +185,12 @@ class FeishuAdapter:
                 body=text,
                 attachments=[],
                 channel="feishu",
+                channel_instance=getattr(self, "adapter_id", "feishu"),
                 metadata={
                     "chat_type": message.chat_type,
                     "mentions": getattr(message, "mentions", []),
                     "source_message_id": message.message_id,
+                    "adapter_id": getattr(self, "adapter_id", "feishu"),
                 },
                 timestamp=datetime.fromtimestamp(
                     int(message.create_time) / 1000, tz=UTC

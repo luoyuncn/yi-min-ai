@@ -10,7 +10,14 @@ from pathlib import Path
 
 import yaml
 
-from agent.config.models import AgentSettings, ProviderConfigItem, ProviderSettings, Settings
+from agent.config.models import (
+    AgentSettings,
+    ChannelInstanceSettings,
+    ChannelSettings,
+    ProviderConfigItem,
+    ProviderSettings,
+    Settings,
+)
 
 
 class ConfigError(ValueError):
@@ -62,6 +69,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             default_primary=default_primary,
             items=provider_items,
         ),
+        channels=_build_channel_settings(_optional_mapping(raw, "channels"), config_dir),
     )
 
 
@@ -173,4 +181,41 @@ def _build_provider_item(item: object, index: int) -> ProviderConfigItem:
         top_p=_optional_float(item, "top_p"),
         max_output_tokens=_optional_int(item, "max_output_tokens"),
         extra_body=_optional_mapping(item, "extra_body"),
+    )
+
+
+def _build_channel_settings(data: dict | None, config_dir: Path) -> ChannelSettings | None:
+    """解析可选的渠道实例配置。"""
+
+    if data is None:
+        return None
+
+    instances_raw = data.get("instances")
+    if instances_raw is None:
+        return ChannelSettings(instances=[])
+    if not isinstance(instances_raw, list):
+        raise ConfigError("channels.instances must be a list if provided")
+
+    return ChannelSettings(
+        instances=[
+            _build_channel_instance(item, index, config_dir)
+            for index, item in enumerate(instances_raw)
+        ]
+    )
+
+
+def _build_channel_instance(item: object, index: int, config_dir: Path) -> ChannelInstanceSettings:
+    """把渠道实例原始字典转换成强类型对象。"""
+
+    if not isinstance(item, dict):
+        raise ConfigError(f"channels.instances[{index}] must be a mapping")
+
+    return ChannelInstanceSettings(
+        name=_require_str(item, "name", f"channels.instances[{index}]"),
+        channel_type=_require_str(item, "type", f"channels.instances[{index}]"),
+        workspace_dir=(
+            config_dir / _require_str(item, "workspace_dir", f"channels.instances[{index}]")
+        ).resolve(),
+        app_id_env=_optional_str(item, "app_id_env"),
+        app_secret_env=_optional_str(item, "app_secret_env"),
     )

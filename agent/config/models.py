@@ -20,6 +20,17 @@ class AgentSettings:
 
 
 @dataclass(slots=True)
+class ChannelInstanceSettings:
+    """单个渠道实例的静态配置。"""
+
+    name: str
+    channel_type: str
+    workspace_dir: Path
+    app_id_env: str | None = None
+    app_secret_env: str | None = None
+
+
+@dataclass(slots=True)
 class ProviderConfigItem:
     """单个 Provider 的静态配置。
 
@@ -52,6 +63,13 @@ class ProviderSettings:
 
 
 @dataclass(slots=True)
+class ChannelSettings:
+    """渠道实例配置集合。"""
+
+    instances: list[ChannelInstanceSettings]
+
+
+@dataclass(slots=True)
 class Settings:
     """运行时顶层配置对象。
 
@@ -62,3 +80,4 @@ class Settings:
 
     agent: AgentSettings
     providers: ProviderSettings
+    channels: ChannelSettings | None = None

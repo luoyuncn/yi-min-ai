@@ -8,10 +8,19 @@
 """
 
 from agent.config.loader import ConfigError, load_settings
-from agent.config.models import AgentSettings, ProviderConfigItem, ProviderSettings, Settings
+from agent.config.models import (
+    AgentSettings,
+    ChannelInstanceSettings,
+    ChannelSettings,
+    ProviderConfigItem,
+    ProviderSettings,
+    Settings,
+)
 
 __all__ = [
     "AgentSettings",
+    "ChannelInstanceSettings",
+    "ChannelSettings",
     "ConfigError",
     "ProviderConfigItem",
     "ProviderSettings",

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.requests import Request
 
 from agent.app import build_app
+from agent.gateway.normalizer import build_thread_key, to_public_thread_id
 from agent.web.ag_ui_adapter import runtime_event_to_ag_ui
 from agent.web.events import CustomEvent, MessagesSnapshotEvent, RunFinishedEvent, RunStartedEvent
 from agent.web.runtime_state import PendingApprovalStore, RunControlRegistry
@@ -64,10 +65,12 @@ def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
     async def list_threads() -> JSONResponse:
         items = []
         for row in agent_app.core.session_archive.list_sessions(limit=100):
-            pending = approvals.get_by_thread(row["session_id"])
+            public_thread_id = _to_web_public_thread_id(row["session_id"])
+            pending = approvals.get_by_thread(row["session_id"]) or approvals.get_by_thread(public_thread_id)
             items.append(
                 {
-                    "thread_id": row["session_id"],
+                    "thread_id": public_thread_id,
+                    "thread_key": row["session_id"],
                     "channel": row["channel"],
                     "message_count": row["message_count"],
                     "created_at": row["created_at"],
@@ -80,13 +83,14 @@ def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
 
     @app.get("/api/threads/{thread_id}")
     async def get_thread(thread_id: str) -> JSONResponse:
-        session = agent_app.core.session_archive.load_session(thread_id)
+        session, internal_thread_id = _load_web_thread(agent_app, thread_id)
         if session is None:
             raise HTTPException(status_code=404, detail="thread not found")
 
         return JSONResponse(
             {
                 "thread_id": thread_id,
+                "thread_key": internal_thread_id,
                 "message_count": session.metadata.message_count,
                 "messages": session.history,
                 "pending_approval": approvals.get_by_thread(thread_id) is not None,
@@ -99,7 +103,7 @@ def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
         run_id = payload.get("run_id") or payload.get("runId") or str(uuid4())
 
         async def event_stream():
-            session = agent_app.core.session_archive.load_session(thread_id)
+            session, _ = _load_web_thread(agent_app, thread_id)
             history = session.history if session is not None else []
             yield encoder.encode(
                 runtime_event_to_ag_ui(RunStartedEvent(thread_id=thread_id, run_id=run_id))
@@ -113,7 +117,7 @@ def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
                             name="on_interrupt",
                             value={
                                 "approval_id": pending.approval_id,
-                                "thread_id": pending.thread_id,
+                                "thread_id": thread_id,
                                 "run_id": pending.run_id,
                                 "tool_name": pending.tool_call["name"],
                                 "tool_call_id": pending.tool_call["id"],
@@ -161,7 +165,7 @@ def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
                     runtime_control=control,
                     approval_store=approvals,
                 ):
-                    yield encoder.encode(runtime_event_to_ag_ui(event))
+                    yield encoder.encode(runtime_event_to_ag_ui(_to_web_public_event(event, thread_id)))
             finally:
                 run_controls.finish(run_id)
 
@@ -199,6 +203,39 @@ def _normalize_command(command: dict | None) -> dict | None:
     if "interruptEvent" in normalized and "interrupt_event" not in normalized:
         normalized["interrupt_event"] = normalized["interruptEvent"]
     return normalized
+
+
+def _load_web_thread(agent_app, thread_id: str):
+    archive = agent_app.core.session_archive
+    for candidate in _web_thread_candidates(thread_id):
+        session = archive.load_session(candidate)
+        if session is not None:
+            return session, candidate
+    return None, None
+
+
+def _web_thread_candidates(thread_id: str) -> list[str]:
+    candidates = [thread_id]
+    internal_thread_id = build_thread_key(thread_id, channel="web")
+    if internal_thread_id not in candidates:
+        candidates.append(internal_thread_id)
+    return candidates
+
+
+def _to_web_public_thread_id(thread_id: str) -> str:
+    return to_public_thread_id(thread_id, channel="web")
+
+
+def _to_web_public_event(event, thread_id: str):
+    if isinstance(event, RunStartedEvent):
+        return RunStartedEvent(thread_id=thread_id, run_id=event.run_id)
+    if isinstance(event, RunFinishedEvent):
+        return RunFinishedEvent(thread_id=thread_id, run_id=event.run_id, result_text=event.result_text)
+    if isinstance(event, CustomEvent) and event.name == "on_interrupt" and isinstance(event.value, dict):
+        value = dict(event.value)
+        value["thread_id"] = thread_id
+        return CustomEvent(name=event.name, value=value)
+    return event
 
 
 async def _read_request_payload(request: Request) -> dict:

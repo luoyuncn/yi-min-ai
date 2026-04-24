@@ -26,17 +26,29 @@ class GatewayServer:
 
     def __init__(self, app: AgentApplication):
         self.app = app
+        self.runtime_apps: dict[str, AgentApplication] = {"default": app}
         self.command_queue = CommandQueue(handler=self._handle_message)
         self.adapters: dict[str, any] = {}
         self._running = False
         self._feishu_patch_interval_secs = 0.8
 
-    async def register_feishu(self, app_id: str, app_secret: str) -> None:
+    def register_runtime_app(self, runtime_id: str, app: AgentApplication) -> None:
+        """注册一个 runtime 对应的 AgentApplication。"""
+
+        self.runtime_apps[runtime_id] = app
+
+    async def register_feishu(
+        self,
+        app_id: str,
+        app_secret: str,
+        *,
+        adapter_id: str = "feishu",
+    ) -> None:
         """注册飞书通道适配器"""
-        adapter = FeishuAdapter(app_id, app_secret)
+        adapter = FeishuAdapter(app_id, app_secret, adapter_id=adapter_id)
         await adapter.connect()
-        self.adapters["feishu"] = adapter
-        logger.info("Feishu adapter registered")
+        self.adapters[adapter_id] = adapter
+        logger.info("Feishu adapter registered: %s", adapter_id)
 
     async def start(self) -> None:
         """启动 Gateway 服务器"""
@@ -45,8 +57,8 @@ class GatewayServer:
 
         # 启动所有适配器的消息接收循环
         tasks = []
-        for channel, adapter in self.adapters.items():
-            task = asyncio.create_task(self._receive_loop(channel, adapter))
+        for adapter_id, adapter in self.adapters.items():
+            task = asyncio.create_task(self._receive_loop(adapter_id, adapter))
             tasks.append(task)
 
         logger.info(f"Gateway server started with {len(self.adapters)} adapters")
@@ -65,9 +77,9 @@ class GatewayServer:
         await self.command_queue.stop()
         logger.info("Gateway server stopped")
 
-    async def _receive_loop(self, channel: str, adapter) -> None:
+    async def _receive_loop(self, adapter_id: str, adapter) -> None:
         """单个适配器的消息接收循环"""
-        logger.debug(f"Starting receive loop for channel: {channel}")
+        logger.debug(f"Starting receive loop for adapter: {adapter_id}")
 
         try:
             async for message in adapter.receive():
@@ -78,25 +90,27 @@ class GatewayServer:
                 ensure_trace_id(metadata, fallback_id=message.message_id)
                 received_at = mark_monotonic(metadata, "gateway_received_at")
                 logger.info(
-                    f"{trace_fields(metadata, session_id=message.session_id, channel=channel)} "
+                    f"{trace_fields(metadata, session_id=message.thread_key, channel=message.channel)} "
                     f"event=message_received sender={message.sender} body_chars={len(message.body)} "
-                    f"received_ms={elapsed_ms(received_at, end=received_at)} preview={text_preview(message.body)}"
+                    f"received_ms={elapsed_ms(received_at, end=received_at)} preview={text_preview(message.body)} "
+                    f"channel_instance={message.channel_instance}"
                 )
                 await self.command_queue.enqueue(message)
 
         except asyncio.CancelledError:
-            logger.debug(f"Receive loop cancelled for channel: {channel}")
+            logger.debug(f"Receive loop cancelled for adapter: {adapter_id}")
         except Exception as e:
-            logger.error(f"Receive loop error for channel {channel}: {e}", exc_info=True)
+            logger.error(f"Receive loop error for adapter {adapter_id}: {e}", exc_info=True)
 
     async def _handle_message(self, message: NormalizedMessage) -> str:
         """处理单条消息（由 CommandQueue 调用）"""
         metadata = message.metadata
         ensure_trace_id(metadata, fallback_id=message.message_id)
         started_at = mark_monotonic(metadata, "gateway_handler_started_at")
+        runtime_app = self._resolve_runtime_app(message.channel_instance)
 
         if message.channel == "feishu":
-            return await self._handle_feishu_message(message)
+            return await self._handle_feishu_message(message, runtime_app)
 
         try:
             logger.info(
@@ -104,10 +118,15 @@ class GatewayServer:
                 f"event=message_started body_chars={len(message.body)}"
             )
             # 调用 AgentCore 处理消息
-            result = await self.app.core.run(message)
+            result = await runtime_app.core.run(message)
 
             # 通过对应通道发送回复
-            await self._send_response(message.channel, message.session_id, result)
+            await self._send_response(
+                message.channel,
+                message.session_id,
+                result,
+                channel_instance=message.channel_instance,
+            )
             logger.info(
                 f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
                 f"event=message_completed total_ms={elapsed_ms(started_at)} output_chars={len(result or '')}"
@@ -128,12 +147,12 @@ class GatewayServer:
 
             raise
 
-    async def _handle_feishu_message(self, message: NormalizedMessage) -> str:
+    async def _handle_feishu_message(self, message: NormalizedMessage, runtime_app: AgentApplication) -> str:
         """飞书通道专用处理：先回执，再更新同一条卡片。"""
 
-        adapter = self.adapters.get("feishu")
+        adapter = self._resolve_adapter(message.channel, message.channel_instance)
         if adapter is None:
-            raise RuntimeError("No adapter found for channel: feishu")
+            raise RuntimeError(f"No adapter found for channel: {message.channel}/{message.channel_instance}")
 
         source_message_id = message.metadata.get("source_message_id")
         placeholder_id: str | None = None
@@ -202,7 +221,7 @@ class GatewayServer:
                     f"event=feishu_ack_sent after_ms={elapsed_ms(started_at)} placeholder_id={placeholder_id}"
                 )
 
-            async for event in self.app.core.run_events(message):
+            async for event in runtime_app.core.run_events(message):
                 if isinstance(event, AssistantTextDeltaEvent):
                     final_text += event.delta
                     if not streaming_logged:
@@ -234,7 +253,12 @@ class GatewayServer:
             if placeholder_id is not None:
                 await patch_placeholder(final_text, force=True)
             else:
-                await self._send_response(message.channel, message.session_id, final_text)
+                await self._send_response(
+                    message.channel,
+                    message.session_id,
+                    final_text,
+                    channel_instance=message.channel_instance,
+                )
 
             logger.info(
                 f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
@@ -261,29 +285,68 @@ class GatewayServer:
                 if placeholder_id is not None:
                     await adapter.update_markdown(placeholder_id, error_msg, status="⚠️ 处理失败")
                 else:
-                    await self._send_response(message.channel, message.session_id, error_msg)
+                    await self._send_response(
+                        message.channel,
+                        message.session_id,
+                        error_msg,
+                        channel_instance=message.channel_instance,
+                    )
             except Exception as send_error:
                 logger.error(f"Failed to send Feishu error response: {send_error}", exc_info=True)
 
             raise
 
     async def _send_response(
-        self, channel: str, session_id: str, content: str
+        self,
+        channel: str,
+        session_id: str,
+        content: str,
+        *,
+        channel_instance: str = "default",
     ) -> None:
         """通过指定通道发送响应"""
-        adapter = self.adapters.get(channel)
+        adapter = self._resolve_adapter(channel, channel_instance)
         if not adapter:
-            logger.warning(f"No adapter found for channel: {channel}")
+            logger.warning(f"No adapter found for channel: {channel}/{channel_instance}")
             return
 
         try:
             await adapter.send(session_id, content)
-            logger.debug(f"Response sent via {channel} to session {session_id}")
+            logger.debug(f"Response sent via {channel}/{channel_instance} to session {session_id}")
         except Exception as e:
             logger.error(f"Failed to send response via {channel}: {e}", exc_info=True)
 
     async def send_to_channel(
-        self, channel: str, session_id: str, content: str
+        self,
+        channel: str,
+        session_id: str,
+        content: str,
+        *,
+        channel_instance: str = "default",
     ) -> None:
         """主动向某个通道发送消息（用于 Heartbeat/Cron）"""
-        await self._send_response(channel, session_id, content)
+        await self._send_response(channel, session_id, content, channel_instance=channel_instance)
+
+    def _resolve_runtime_app(self, channel_instance: str) -> AgentApplication:
+        runtime_app = self.runtime_apps.get(channel_instance) or self.runtime_apps.get("default")
+        if runtime_app is None:
+            raise RuntimeError(f"No runtime app registered for channel instance: {channel_instance}")
+        return runtime_app
+
+    def _resolve_adapter(self, channel: str, channel_instance: str):
+        adapter = self.adapters.get(channel_instance)
+        if adapter is not None:
+            return adapter
+
+        adapter = self.adapters.get(channel)
+        if adapter is not None:
+            return adapter
+
+        matching = [
+            candidate
+            for candidate in self.adapters.values()
+            if getattr(candidate, "channel_type", None) == channel
+        ]
+        if len(matching) == 1:
+            return matching[0]
+        return None

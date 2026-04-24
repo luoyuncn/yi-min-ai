@@ -53,3 +53,17 @@ async def test_session_manager_restores_archived_session_when_not_active(tmp_pat
     assert restored.metadata.channel == "web"
     assert restored.metadata.message_count == 2
     assert restored.history[1]["content"] == "你好，我在。"
+
+
+@pytest.mark.asyncio
+async def test_session_manager_does_not_reuse_sessions_across_runtime_scoped_thread_keys(tmp_path: Path) -> None:
+    """即使外部 chat_id 一样，不同 runtime 的 thread key 也应隔离。"""
+
+    manager = SessionManager(db_path=tmp_path / "sessions.db")
+
+    first = await manager.get_or_create("feishu:feishu-main:oc_same", channel="feishu")
+    second = await manager.get_or_create("feishu:feishu-ops:oc_same", channel="feishu")
+
+    assert first is not second
+    assert first.metadata.session_id == "feishu:feishu-main:oc_same"
+    assert second.metadata.session_id == "feishu:feishu-ops:oc_same"

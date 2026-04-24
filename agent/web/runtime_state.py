@@ -60,6 +60,7 @@ class PendingApproval:
     tool_call: dict
     context: list[dict]
     message: str
+    thread_aliases: tuple[str, ...] = ()
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -78,8 +79,13 @@ class PendingApprovalStore:
         tool_call: dict,
         context: list[dict],
         message: str,
+        aliases: list[str] | tuple[str, ...] | None = None,
     ) -> PendingApproval:
-        existing_id = self._thread_index.get(thread_id)
+        thread_keys = self._normalize_thread_keys(thread_id, aliases)
+        existing_id = next(
+            (self._thread_index[key] for key in thread_keys if key in self._thread_index),
+            None,
+        )
         if existing_id is not None:
             self.resolve(existing_id)
 
@@ -90,9 +96,11 @@ class PendingApprovalStore:
             tool_call=deepcopy(tool_call),
             context=deepcopy(context),
             message=message,
+            thread_aliases=thread_keys,
         )
         self._by_id[approval.approval_id] = approval
-        self._thread_index[thread_id] = approval.approval_id
+        for key in thread_keys:
+            self._thread_index[key] = approval.approval_id
         return approval
 
     def get(self, approval_id: str) -> PendingApproval | None:
@@ -108,5 +116,18 @@ class PendingApprovalStore:
         approval = self._by_id.pop(approval_id, None)
         if approval is None:
             return None
-        self._thread_index.pop(approval.thread_id, None)
+        for key in approval.thread_aliases:
+            if self._thread_index.get(key) == approval_id:
+                self._thread_index.pop(key, None)
         return approval
+
+    def _normalize_thread_keys(
+        self,
+        thread_id: str,
+        aliases: list[str] | tuple[str, ...] | None,
+    ) -> tuple[str, ...]:
+        ordered = [thread_id]
+        for alias in aliases or ():
+            if alias and alias not in ordered:
+                ordered.append(alias)
+        return tuple(ordered)

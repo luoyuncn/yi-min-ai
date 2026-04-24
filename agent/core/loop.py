@@ -102,7 +102,8 @@ class AgentCore:
     ):
         """处理一条消息，并以事件流形式暴露执行轨迹。"""
 
-        thread_id = message.session_id
+        thread_id = message.thread_key
+        thread_aliases = [message.session_id] if message.session_id != thread_id else []
         run_id = message.metadata.get("run_id") or message.message_id
         metadata = message.metadata
         ensure_trace_id(metadata, fallback_id=message.message_id)
@@ -124,7 +125,7 @@ class AgentCore:
         yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
 
         try:
-            session = await self.session_manager.get_or_create(message.session_id, channel=message.channel)
+            session = await self.session_manager.get_or_create(thread_id, channel=message.channel)
             logger.info(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
                 f"event=session_loaded history_messages={len(session.history)}"
@@ -169,6 +170,7 @@ class AgentCore:
                 channel=message.channel,
                 runtime_control=runtime_control,
                 approval_store=approval_store,
+                thread_aliases=thread_aliases,
             ):
                 yield event
         except Exception as exc:
@@ -196,6 +198,7 @@ class AgentCore:
         channel: str,
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
+        thread_aliases: list[str],
     ):
         for index in range(self.max_iterations):
             step_name = f"iteration-{index + 1}"
@@ -351,6 +354,7 @@ class AgentCore:
                 message_metadata=message_metadata,
                 channel=channel,
                 approval_store=approval_store,
+                thread_aliases=thread_aliases,
             ):
                 if isinstance(event, CustomEvent):
                     interrupted = True
@@ -464,6 +468,7 @@ class AgentCore:
         message_metadata: dict,
         channel: str,
         approval_store: PendingApprovalStore | None,
+        thread_aliases: list[str],
     ):
         for tool_call in tool_calls:
             if approval_store is not None and self._requires_approval(tool_call["name"]):
@@ -473,6 +478,7 @@ class AgentCore:
                     tool_call=tool_call,
                     context=context,
                     message=f"Approval required for {tool_call['name']}",
+                    aliases=thread_aliases,
                 )
                 self.session_archive.persist_session(session)
                 logger.info(
@@ -611,6 +617,7 @@ class AgentCore:
             channel=channel,
             runtime_control=runtime_control,
             approval_store=approval_store,
+            thread_aliases=list(pending.thread_aliases[1:]),
         ):
             yield event
 

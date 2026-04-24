@@ -131,7 +131,46 @@ async def build_app_async(config_path: Path, testing: bool = False) -> AgentAppl
     config_path = config_path.resolve()
     _load_environment_files(config_path)
     settings = load_settings(config_path)
-    workspace_dir = settings.agent.workspace_dir
+    return await _build_app_from_settings_async(
+        settings,
+        workspace_dir=settings.agent.workspace_dir,
+        testing=testing,
+    )
+
+
+async def build_channel_apps_async(
+    config_path: Path,
+    testing: bool = False,
+) -> tuple[object, dict[str, AgentApplication]]:
+    """按渠道实例配置构建多个 AgentApplication。"""
+
+    config_path = config_path.resolve()
+    _load_environment_files(config_path)
+    settings = load_settings(config_path)
+
+    if settings.channels and settings.channels.instances:
+        apps: dict[str, AgentApplication] = {}
+        for instance in settings.channels.instances:
+            apps[instance.name] = await _build_app_from_settings_async(
+                settings,
+                workspace_dir=instance.workspace_dir,
+                testing=testing,
+            )
+        return settings, apps
+
+    return settings, {
+        "default": await _build_app_from_settings_async(
+            settings,
+            workspace_dir=settings.agent.workspace_dir,
+            testing=testing,
+        )
+    }
+
+
+async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testing: bool = False) -> AgentApplication:
+    """按已加载的 Settings 与 workspace 构建应用实例。"""
+
+    workspace_dir = Path(workspace_dir).resolve()
     workspace_dir.mkdir(parents=True, exist_ok=True)
     (workspace_dir / "skills").mkdir(parents=True, exist_ok=True)
     _ensure_workspace_files(workspace_dir)

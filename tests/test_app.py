@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 
 import agent.core.provider_manager as provider_manager_module
-from agent.app import _build_provider_manager, build_app
-from agent.config.models import AgentSettings, ProviderConfigItem, ProviderSettings, Settings
+from agent.app import _build_provider_manager, build_app, build_channel_apps_async
+from agent.config.models import AgentSettings, ChannelInstanceSettings, ChannelSettings, ProviderConfigItem, ProviderSettings, Settings
 from agent.core.provider import LLMRequest, LLMResponse, ProviderConfig
 
 
@@ -221,3 +221,53 @@ def test_build_provider_manager_applies_llm_factory_defaults_for_primary_provide
     _build_provider_manager(settings)
 
     assert captured["extra_body"] == {"enable_thinking": True}
+
+
+def test_build_channel_apps_async_uses_runtime_workspace_overrides(tmp_path: Path) -> None:
+    """多渠道实例模式下，应为每个 runtime 构建独立 workspace 的 app。"""
+
+    config_dir = tmp_path / "config"
+    default_workspace = tmp_path / "workspace"
+    main_workspace = tmp_path / "workspace-main"
+    ops_workspace = tmp_path / "workspace-ops"
+    config_dir.mkdir()
+    default_workspace.mkdir()
+    main_workspace.mkdir()
+    ops_workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Atlas\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "channels:\n"
+        "  instances:\n"
+        "    - name: feishu-main\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-main\n"
+        "      app_id_env: FEISHU_MAIN_APP_ID\n"
+        "      app_secret_env: FEISHU_MAIN_APP_SECRET\n"
+        "    - name: feishu-ops\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-ops\n"
+        "      app_id_env: FEISHU_OPS_APP_ID\n"
+        "      app_secret_env: FEISHU_OPS_APP_SECRET\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    _, apps = asyncio.run(build_channel_apps_async(config_dir / "agent.yaml", testing=True))
+
+    assert set(apps.keys()) == {"feishu-main", "feishu-ops"}
+    assert apps["feishu-main"].core.workspace_dir == main_workspace.resolve()
+    assert apps["feishu-ops"].core.workspace_dir == ops_workspace.resolve()

@@ -48,7 +48,7 @@ class CommandQueue:
         if not self._running:
             raise RuntimeError("Command queue not started")
 
-        sid = message.session_id
+        sid = message.thread_key
         metadata = message.metadata
         ensure_trace_id(metadata, fallback_id=message.message_id)
 

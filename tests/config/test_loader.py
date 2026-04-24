@@ -225,3 +225,54 @@ def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> 
     assert provider.temperature == 0.4
     assert provider.top_p == 0.9
     assert provider.max_output_tokens == 4096
+
+
+def test_load_settings_parses_channel_instances_with_independent_workspaces(tmp_path: Path) -> None:
+    """多渠道实例配置应能解析为独立 workspace 的运行时定义。"""
+
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    channel_a_workspace = tmp_path / "workspace-a"
+    channel_b_workspace = tmp_path / "workspace-b"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+    channel_a_workspace.mkdir()
+    channel_b_workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Atlas\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "channels:\n"
+        "  instances:\n"
+        "    - name: feishu-main\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-a\n"
+        "      app_id_env: FEISHU_MAIN_APP_ID\n"
+        "      app_secret_env: FEISHU_MAIN_APP_SECRET\n"
+        "    - name: feishu-ops\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-b\n"
+        "      app_id_env: FEISHU_OPS_APP_ID\n"
+        "      app_secret_env: FEISHU_OPS_APP_SECRET\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.channels is not None
+    assert [item.name for item in settings.channels.instances] == ["feishu-main", "feishu-ops"]
+    assert settings.channels.instances[0].workspace_dir == channel_a_workspace.resolve()
+    assert settings.channels.instances[1].workspace_dir == channel_b_workspace.resolve()

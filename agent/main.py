@@ -194,7 +194,7 @@ async def _run_gateway(
     enable_cron: bool,
 ):
     """运行 Gateway 模式"""
-    from agent.app import build_app_async
+    from agent.app import build_channel_apps_async
     from agent.gateway.server import GatewayServer
     from agent.scheduler import HeartbeatScheduler, CronScheduler
 
@@ -202,30 +202,68 @@ async def _run_gateway(
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
-    app = await build_app_async(config_path, testing=testing)
+    settings, apps = await build_channel_apps_async(config_path, testing=testing)
+    default_app = apps.get("default") or next(iter(apps.values()))
     logger.info("✓ Agent 应用加载完成")
 
     # 2. 初始化 Gateway
-    gateway = GatewayServer(app)
+    gateway = GatewayServer(default_app)
+    for runtime_id, app in apps.items():
+        gateway.register_runtime_app(runtime_id, app)
+
+    multi_runtime_mode = bool(settings.channels and settings.channels.instances)
 
     # 3. 注册飞书通道
     if enable_feishu and not testing:
-        feishu_app_id = os.environ.get("FEISHU_APP_ID")
-        feishu_app_secret = os.environ.get("FEISHU_APP_SECRET")
+        if multi_runtime_mode:
+            for instance in settings.channels.instances:
+                if instance.channel_type != "feishu":
+                    logger.warning("暂不支持的渠道类型: %s", instance.channel_type)
+                    continue
 
-        if not feishu_app_id or not feishu_app_secret:
-            logger.warning(
-                "飞书凭证未设置，跳过飞书通道。\n"
-                "  提示：设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET 环境变量"
-            )
+                feishu_app_id = os.environ.get(instance.app_id_env or "")
+                feishu_app_secret = os.environ.get(instance.app_secret_env or "")
+                if not feishu_app_id or not feishu_app_secret:
+                    logger.warning(
+                        "渠道实例 %s 缺少飞书凭证环境变量：%s / %s",
+                        instance.name,
+                        instance.app_id_env,
+                        instance.app_secret_env,
+                    )
+                    continue
+
+                logger.info("正在连接飞书实例 %s（APP_ID: %s...）", instance.name, feishu_app_id[:10])
+                try:
+                    await gateway.register_feishu(
+                        feishu_app_id,
+                        feishu_app_secret,
+                        adapter_id=instance.name,
+                    )
+                    logger.info("✓ 飞书实例已连接: %s", instance.name)
+                except Exception as e:
+                    logger.error("✗ 飞书实例 %s 连接失败: %s", instance.name, e)
         else:
-            logger.info(f"正在连接飞书（APP_ID: {feishu_app_id[:10]}...）")
-            try:
-                await gateway.register_feishu(feishu_app_id, feishu_app_secret)
-                logger.info("✓ 飞书通道已连接")
-            except Exception as e:
-                logger.error(f"✗ 飞书通道连接失败: {e}")
-                logger.warning("将继续运行，但飞书通道不可用")
+            feishu_app_id = os.environ.get("FEISHU_APP_ID")
+            feishu_app_secret = os.environ.get("FEISHU_APP_SECRET")
+
+            if not feishu_app_id or not feishu_app_secret:
+                logger.warning(
+                    "飞书凭证未设置，跳过飞书通道。\n"
+                    "  提示：设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET 环境变量"
+                )
+            else:
+                logger.info(f"正在连接飞书（APP_ID: {feishu_app_id[:10]}...）")
+                try:
+                    await gateway.register_feishu(feishu_app_id, feishu_app_secret)
+                    logger.info("✓ 飞书通道已连接")
+                except Exception as e:
+                    logger.error(f"✗ 飞书通道连接失败: {e}")
+                    logger.warning("将继续运行，但飞书通道不可用")
+
+    if multi_runtime_mode and (enable_heartbeat or enable_cron):
+        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron 扇出，已自动禁用")
+        enable_heartbeat = False
+        enable_cron = False
 
     # 4. 启动 Heartbeat
     heartbeat_scheduler = None
@@ -233,7 +271,7 @@ async def _run_gateway(
         logger.info(f"启动 Heartbeat 调度器（间隔: {heartbeat_interval} 分钟）")
         heartbeat_scheduler = HeartbeatScheduler(
             workspace_dir=workspace_dir,
-            agent_core=app.core,
+            agent_core=default_app.core,
             gateway=gateway,
             interval_minutes=heartbeat_interval,
         )
@@ -247,7 +285,7 @@ async def _run_gateway(
         cron_scheduler = CronScheduler(
             config_path=workspace_dir / "CRON.yaml",
             workspace_dir=workspace_dir,
-            agent_core=app.core,
+            agent_core=default_app.core,
             gateway=gateway,
         )
         await cron_scheduler.start()
@@ -284,7 +322,7 @@ async def _run_all(
 ):
     """同时运行 Web + Gateway"""
     import uvicorn
-    from agent.app import build_app_async
+    from agent.app import build_app_async, build_channel_apps_async
     from agent.gateway.server import GatewayServer
     from agent.scheduler import HeartbeatScheduler, CronScheduler
 
@@ -292,23 +330,60 @@ async def _run_all(
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
-    app_instance = await build_app_async(config_path, testing=testing)
+    settings, apps = await build_channel_apps_async(config_path, testing=testing)
+    app_instance = apps.get("default") or next(iter(apps.values()))
     logger.info("✓ Agent 应用加载完成")
 
     # 2. 初始化 Gateway
     gateway = GatewayServer(app_instance)
+    for runtime_id, app in apps.items():
+        gateway.register_runtime_app(runtime_id, app)
+
+    multi_runtime_mode = bool(settings.channels and settings.channels.instances)
 
     # 3. 注册飞书通道
     if enable_feishu and not testing:
-        feishu_app_id = os.environ.get("FEISHU_APP_ID")
-        feishu_app_secret = os.environ.get("FEISHU_APP_SECRET")
+        if multi_runtime_mode:
+            for instance in settings.channels.instances:
+                if instance.channel_type != "feishu":
+                    logger.warning("暂不支持的渠道类型: %s", instance.channel_type)
+                    continue
 
-        if feishu_app_id and feishu_app_secret:
-            try:
-                await gateway.register_feishu(feishu_app_id, feishu_app_secret)
-                logger.info("✓ 飞书通道已连接")
-            except Exception as e:
-                logger.warning(f"飞书通道连接失败: {e}")
+                feishu_app_id = os.environ.get(instance.app_id_env or "")
+                feishu_app_secret = os.environ.get(instance.app_secret_env or "")
+                if not feishu_app_id or not feishu_app_secret:
+                    logger.warning(
+                        "渠道实例 %s 缺少飞书凭证环境变量：%s / %s",
+                        instance.name,
+                        instance.app_id_env,
+                        instance.app_secret_env,
+                    )
+                    continue
+
+                try:
+                    await gateway.register_feishu(
+                        feishu_app_id,
+                        feishu_app_secret,
+                        adapter_id=instance.name,
+                    )
+                    logger.info("✓ 飞书实例已连接: %s", instance.name)
+                except Exception as e:
+                    logger.warning(f"飞书实例 {instance.name} 连接失败: {e}")
+        else:
+            feishu_app_id = os.environ.get("FEISHU_APP_ID")
+            feishu_app_secret = os.environ.get("FEISHU_APP_SECRET")
+
+            if feishu_app_id and feishu_app_secret:
+                try:
+                    await gateway.register_feishu(feishu_app_id, feishu_app_secret)
+                    logger.info("✓ 飞书通道已连接")
+                except Exception as e:
+                    logger.warning(f"飞书通道连接失败: {e}")
+
+    if multi_runtime_mode and (enable_heartbeat or enable_cron):
+        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron 扇出，已自动禁用")
+        enable_heartbeat = False
+        enable_cron = False
 
     # 4. 启动调度器
     heartbeat_scheduler = None

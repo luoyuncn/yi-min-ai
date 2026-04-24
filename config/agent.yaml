@@ -6,3 +6,17 @@ agent:
 providers:
   config_file: "providers.yaml"
   default_primary: "qwen"
+
+channels:
+  instances:
+    - name: "feishu-main"
+      type: "feishu"
+      workspace_dir: "../workspace-main"
+      app_id_env: "FEISHU_MAIN_APP_ID"
+      app_secret_env: "FEISHU_MAIN_APP_SECRET"
+
+    - name: "feishu-ops"
+      type: "feishu"
+      workspace_dir: "../workspace-min"
+      app_id_env: "FEISHU_MIN_APP_ID"
+      app_secret_env: "FEISHU_MIN_APP_SECRET"

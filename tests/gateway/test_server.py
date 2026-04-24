@@ -136,3 +136,50 @@ def test_gateway_server_logs_feishu_processing_timeline(caplog) -> None:
     assert "event=feishu_streaming_started" in log_text
     assert "event=feishu_message_completed" in log_text
     assert "trace_id=" in log_text
+
+
+class FakeNamedCore:
+    def __init__(self, label: str) -> None:
+        self._label = label
+
+    async def run_events(self, message):
+        text = f"来自 {self._label}"
+        yield RunStartedEvent(thread_id=message.session_id, run_id=message.message_id)
+        yield AssistantTextStartEvent(message_id=f"assistant-{self._label}")
+        yield AssistantTextDeltaEvent(message_id=f"assistant-{self._label}", delta=text)
+        yield AssistantTextEndEvent(message_id=f"assistant-{self._label}")
+        yield RunFinishedEvent(
+            thread_id=message.session_id,
+            run_id=message.message_id,
+            result_text=text,
+        )
+
+
+def test_gateway_server_routes_messages_to_runtime_specific_app_and_adapter() -> None:
+    """不同飞书实例应路由到各自的 app runtime 和 adapter。"""
+
+    gateway = GatewayServer(SimpleNamespace(core=FakeNamedCore("默认")))
+    gateway.register_runtime_app("feishu-ops", SimpleNamespace(core=FakeNamedCore("运维")))
+
+    default_adapter = FakeFeishuAdapter()
+    ops_adapter = FakeFeishuAdapter()
+    gateway.adapters["feishu"] = default_adapter
+    gateway.adapters["feishu-ops"] = ops_adapter
+
+    message = NormalizedMessage(
+        message_id="run-ops-1",
+        session_id="chat-ops-1",
+        sender="user-ops",
+        body="你好",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu-ops",
+        metadata={"source_message_id": "src-ops-1"},
+    )
+
+    result = asyncio.run(gateway._handle_message(message))
+
+    assert result == "来自 运维"
+    assert default_adapter.calls == []
+    assert ops_adapter.calls[0] == ("reply_markdown", "src-ops-1", "👀 已收到，正在思考…|")
+    assert ops_adapter.calls[1] == ("update_markdown", "bot-msg-1", "|来自 运维")
