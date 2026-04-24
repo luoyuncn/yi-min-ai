@@ -30,6 +30,7 @@ class FeishuAdapter:
         self.adapter_id = adapter_id
         self.channel_type = "feishu"
         self._message_queue: asyncio.Queue[NormalizedMessage] = asyncio.Queue()
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         self._lark_client = None
         self._ws_client = None
         self._ws_loop = None
@@ -61,6 +62,9 @@ class FeishuAdapter:
             self._ws_connect_timeout_secs = 15.0
 
         logger.info("Connecting to Feishu via WebSocket...")
+
+        # 捕获主 loop 引用，供 ws_loop 线程通过 call_soon_threadsafe 安全写队列
+        self._main_loop = asyncio.get_running_loop()
 
         # 构建事件处理器（不产生 Future，可在主 loop 上构建）
         self._event_handler = (
@@ -210,7 +214,12 @@ class FeishuAdapter:
                 ),
             )
 
-            self._message_queue.put_nowait(normalized)
+            # _on_message_receive 在 ws_loop 线程调用，必须通过 call_soon_threadsafe
+            # 把 put_nowait 调度回主 loop，否则主 loop 上的 get() 永远不会被唤醒。
+            if self._main_loop is not None:
+                self._main_loop.call_soon_threadsafe(self._message_queue.put_nowait, normalized)
+            else:
+                self._message_queue.put_nowait(normalized)
             logger.debug(f"Feishu message queued: {message.message_id}")
 
         except Exception as e:
