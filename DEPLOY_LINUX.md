@@ -1,6 +1,6 @@
 # Linux 部署指南
 
-这份文档对应当前仓库里的最新部署方式：`systemd --user` + `yimin` 生命周期命令。
+这份文档对应当前仓库里的最新部署方式：`yimin` 生命周期命令，同时支持用户态 `systemd --user` 和 `sudo` 下的 system 级 service。
 
 ## 目标
 
@@ -34,18 +34,29 @@ cp .env.example .env
 
 ## 2. 一键安装
 
+用户态安装：
+
 ```bash
 ./scripts/install_linux.sh
+```
+
+system 级安装：
+
+```bash
+sudo ./scripts/install_linux.sh
 ```
 
 这个脚本会做几件事：
 
 1. `uv sync`
-2. 把仓库里的 `scripts/yimin` 链接到 `~/.local/bin/yimin`
-3. 写入 `~/.config/systemd/user/yimin.service`
-4. 注册并启动 `yimin` 服务
+2. 普通用户模式下把仓库里的 `scripts/yimin` 链接到 `~/.local/bin/yimin`
+3. `sudo` 模式下把 `yimin` 链接到 `/usr/local/bin/yimin`
+4. 根据权限写入用户态或 system 级 service
+5. 注册并启动 `yimin` 服务
 
 ## 3. 生命周期命令
+
+用户态：
 
 ```bash
 yimin status
@@ -55,10 +66,26 @@ yimin restart
 yimin logs
 ```
 
+system 级：
+
+```bash
+sudo yimin status
+sudo yimin start
+sudo yimin stop
+sudo yimin restart
+sudo yimin logs
+```
+
 如果你只想安装 service 不立刻启动，也可以手动执行：
 
 ```bash
 ./scripts/yimin install
+```
+
+或：
+
+```bash
+sudo ./scripts/yimin install --scope system --service-user "$USER"
 ```
 
 卸载：
@@ -69,10 +96,18 @@ yimin logs
 
 ## 4. 数据目录
 
-Linux 部署默认使用外部数据目录：
+Linux 部署默认使用外部数据目录。
+
+用户态默认：
 
 ```text
 ~/.local/share/yi-min-ai
+```
+
+system 级默认：
+
+```text
+/var/lib/yi-min-ai
 ```
 
 如果你想改位置，先设置：
@@ -122,10 +157,22 @@ yimin logs
 journalctl --user -u yimin -f
 ```
 
+system 级等价于：
+
+```bash
+sudo journalctl -u yimin -f
+```
+
 查看 service 状态：
 
 ```bash
 yimin status
+```
+
+system 级：
+
+```bash
+sudo yimin status
 ```
 
 如果用户态 service 在退出登录后不会继续运行，执行：
@@ -138,4 +185,5 @@ loginctl enable-linger "$USER"
 
 - 当前仓库默认的 `config/agent.yaml` 更适合本地开发
 - 生产建议用 `config/agent.linux.yaml`
+- `sudo ./scripts/install_linux.sh` 会自动尝试把 `uv sync` 退回到原调用用户执行，避免把仓库和 `.venv` 改成 root 所有
 - 当前多 runtime 模式下，Heartbeat / Cron 仍会自动禁用，这是现阶段实现限制

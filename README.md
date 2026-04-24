@@ -17,7 +17,7 @@ Yi Min AI Assistant，当前已经是一套可运行的本地 / 飞书多通道 
 
 - Python `3.12+`
 - `uv`
-- Linux 常驻部署时需要 `systemd --user`
+- Linux 常驻部署时需要 `systemd`
 
 安装 `uv`：
 
@@ -115,7 +115,7 @@ export YIMIN_DATA_ROOT=/data/yi-min-ai
 
 ## Linux 一键部署
 
-安装并注册用户态 systemd 服务：
+安装并注册用户态或 system 级 systemd 服务：
 
 ```bash
 ./scripts/install_linux.sh
@@ -133,11 +133,16 @@ yimin logs
 
 默认行为：
 
-- service 文件写到 `~/.config/systemd/user/yimin.service`
-- 运行数据写到 `~/.local/share/yi-min-ai`
-- 启动命令使用 `config/agent.linux.yaml`
+- 普通用户执行时：安装 `systemd --user` 服务到 `~/.config/systemd/user/yimin.service`
+- `sudo ./scripts/install_linux.sh` 时：安装 system 级服务到 `/etc/systemd/system/yimin.service`
+- 启动命令都使用 `config/agent.linux.yaml`
 
-如果你希望用户态服务在退出登录后继续运行，执行一次：
+默认数据目录：
+
+- 用户态安装：`~/.local/share/yi-min-ai`
+- `sudo` system 安装：`/var/lib/yi-min-ai`
+
+如果你使用的是用户态 service，并且希望退出登录后继续运行，执行一次：
 
 ```bash
 loginctl enable-linger "$USER"
@@ -154,6 +159,14 @@ yimin restart
 ```
 
 这套流程只更新代码和依赖，不会覆盖 `YIMIN_DATA_ROOT` 下的用户资产。
+
+如果是 system 级安装：
+
+```bash
+git pull
+uv sync
+sudo yimin restart
+```
 
 ## 说明
 
