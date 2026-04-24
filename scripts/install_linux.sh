@@ -123,6 +123,7 @@ cd "$REPO_ROOT"
 run_sync "$UV_BIN"
 
 chmod +x "$REPO_ROOT/scripts/yimin"
+chmod +x "$REPO_ROOT/scripts/run_linux_service.sh"
 
 INSTALL_ARGS=(--enable --start)
 

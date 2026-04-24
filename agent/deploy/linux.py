@@ -70,7 +70,13 @@ def _render_service(
     repo_root = repo_root.resolve()
     data_root = data_root.resolve()
     config_path = (config_path or repo_root / "config" / "agent.linux.yaml").resolve()
-    python_executable = (python_executable or repo_root / ".venv" / "bin" / "python").resolve()
+    launcher_script = (repo_root / "scripts" / "run_linux_service.sh").resolve()
+
+    if python_executable is not None:
+        python_executable = python_executable.resolve()
+        exec_start = f"{python_executable} -m agent.main --config {config_path}"
+    else:
+        exec_start = f"{launcher_script} {config_path}"
 
     lines = [
         "[Unit]",
@@ -83,7 +89,7 @@ def _render_service(
         f"WorkingDirectory={repo_root}",
         f"Environment=YIMIN_DATA_ROOT={data_root}",
         f"EnvironmentFile=-{repo_root / '.env'}",
-        f"ExecStart={python_executable} -m agent.main --config {config_path}",
+        f"ExecStart={exec_start}",
         "Restart=always",
         "RestartSec=5",
         "KillSignal=SIGINT",

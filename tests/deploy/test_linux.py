@@ -26,7 +26,7 @@ def test_render_user_service_points_to_repo_venv_and_external_runtime_dir(tmp_pa
     assert f"WorkingDirectory={repo_root}" in rendered
     assert f"Environment=YIMIN_DATA_ROOT={data_root}" in rendered
     assert (
-        f"ExecStart={repo_root / '.venv' / 'bin' / 'python'} -m agent.main --config "
+        f"ExecStart={repo_root / 'scripts' / 'run_linux_service.sh'} "
         f"{repo_root / 'config' / 'agent.linux.yaml'}"
     ) in rendered
 
@@ -54,7 +54,7 @@ def test_render_system_service_runs_as_target_user_and_targets_multi_user(tmp_pa
     assert "WantedBy=multi-user.target" in rendered
     assert f"Environment=YIMIN_DATA_ROOT={data_root}" in rendered
     assert (
-        f"ExecStart={repo_root / '.venv' / 'bin' / 'python'} -m agent.main --config "
+        f"ExecStart={repo_root / 'scripts' / 'run_linux_service.sh'} "
         f"{repo_root / 'config' / 'agent.linux.yaml'}"
     ) in rendered
 
@@ -92,3 +92,11 @@ def test_install_linux_script_repairs_uv_cache_permissions_for_sudo_user() -> No
 
     assert 'mkdir -p "$user_home/.cache/uv"' in script_text
     assert 'chown -R "$SUDO_USER:$user_group" "$user_home/.cache/uv"' in script_text
+
+
+def test_run_linux_service_script_prefers_repo_venv_python() -> None:
+    script_text = Path("scripts/run_linux_service.sh").read_text(encoding="utf-8")
+
+    assert '$REPO_ROOT/.venv/bin/python' in script_text
+    assert 'exec "$REPO_ROOT/.venv/bin/python" -m agent.main --config "$CONFIG_PATH"' in script_text
+    assert 'exec uv run python -m agent.main --config "$CONFIG_PATH"' in script_text

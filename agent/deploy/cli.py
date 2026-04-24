@@ -207,7 +207,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.handler(args)
+    try:
+        args.handler(args)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(exc.returncode) from None
 
 
 if __name__ == "__main__":
