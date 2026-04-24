@@ -7,6 +7,12 @@ if [[ "${OSTYPE:-}" != linux* ]]; then
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
+  if [[ -z "${SUDO_USER:-}" ]]; then
+    echo "uv is required. Install it first: https://docs.astral.sh/uv/"
+    exit 1
+  fi
+fi
+
 SOURCE="${BASH_SOURCE[0]}"
 if command -v readlink >/dev/null 2>&1; then
   SOURCE="$(readlink -f "$SOURCE")"
