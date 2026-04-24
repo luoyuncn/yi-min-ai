@@ -1,6 +1,7 @@
 """M-flow bridge 测试。"""
 
 import asyncio
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -339,3 +340,83 @@ def test_mflow_bridge_ingests_and_queries_after_initialization(monkeypatch, tmp_
     assert len(bundles) == 1
     assert bundles[0].episode_id == "ep-1"
     assert bundles[0].summary == "用户说他想用阿里云 embedding。"
+
+
+def test_mflow_bridge_preserves_existing_root_log_handlers_during_sdk_import(monkeypatch, tmp_path: Path) -> None:
+    """导入 m_flow 即便重配 root logger，也不能让宿主日志文件断流。"""
+
+    host_log = tmp_path / "agent.log"
+    host_handler = logging.FileHandler(host_log, encoding="utf-8")
+    host_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+    root_logger.handlers = [host_handler]
+    root_logger.setLevel(logging.INFO)
+
+    class FakeConfig:
+        def clear_caches(self) -> int:
+            return 1
+
+        def system_root_directory(self, value: str) -> None:
+            return None
+
+        def data_root_directory(self, value: str) -> None:
+            return None
+
+        def set_llm_provider(self, value: str) -> None:
+            return None
+
+        def set_llm_model(self, value: str) -> None:
+            return None
+
+        def set_llm_api_key(self, value: str) -> None:
+            return None
+
+        def set_llm_endpoint(self, value: str) -> None:
+            return None
+
+        def set_graph_database_provider(self, value: str) -> None:
+            return None
+
+        def set_vector_db_provider(self, value: str) -> None:
+            return None
+
+    fake_mflow = SimpleNamespace(config=FakeConfig(), add=None, memorize=None, query=None)
+
+    def fake_import(name: str):
+        if name == "m_flow":
+            hijacked_handler = logging.StreamHandler()
+            root_logger.handlers = [hijacked_handler]
+            root_logger.setLevel(logging.NOTSET)
+            return fake_mflow
+        if name == "litellm":
+            return SimpleNamespace(aembedding=None)
+        raise ImportError(name)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+    monkeypatch.setattr("agent.memory.mflow_bridge.importlib.import_module", fake_import)
+
+    try:
+        bridge = MflowBridge(data_dir=tmp_path / "mflow_data", runtime_config=_build_runtime_config())
+        logging.getLogger("probe").info("after-import")
+        logging.getLogger("probe").debug("after-import-debug")
+        asyncio.run(bridge.initialize())
+        logging.getLogger("probe").info("after-init")
+    finally:
+        for handler in root_logger.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        root_logger.handlers = original_handlers
+        root_logger.setLevel(original_level)
+        host_handler.close()
+
+    host_log_text = host_log.read_text(encoding="utf-8")
+
+    assert "after-import" in host_log_text
+    assert "after-init" in host_log_text
+    assert "after-import-debug" not in host_log_text

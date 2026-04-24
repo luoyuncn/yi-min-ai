@@ -1,6 +1,7 @@
 """应用装配层测试。"""
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 
@@ -610,4 +611,64 @@ def test_build_app_resolves_mflow_runtime_config_from_provider_references(tmp_pa
     assert runtime_config.embedding.provider == "openai"
     assert runtime_config.embedding.model == "openai/text-embedding-v4"
     assert runtime_config.embedding.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_build_channel_apps_async_logs_runtime_startup_progress(tmp_path: Path, monkeypatch, caplog) -> None:
+    """多 runtime 装配时应把每个阶段写进宿主日志，便于定位卡点。"""
+
+    config_dir = tmp_path / "config"
+    main_workspace = tmp_path / "workspace-main"
+    ops_workspace = tmp_path / "workspace-ops"
+    config_dir.mkdir()
+    main_workspace.mkdir()
+    ops_workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "channels:\n"
+        "  instances:\n"
+        "    - name: feishu-main\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-main\n"
+        "      app_id_env: FEISHU_MAIN_APP_ID\n"
+        "      app_secret_env: FEISHU_MAIN_APP_SECRET\n"
+        "    - name: feishu-ops\n"
+        "      type: feishu\n"
+        "      workspace_dir: ../workspace-ops\n"
+        "      app_id_env: FEISHU_OPS_APP_ID\n"
+        "      app_secret_env: FEISHU_OPS_APP_SECRET\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    class DummyMflowBridge:
+        def __init__(self, *, data_dir, runtime_config):
+            self.is_available = False
+
+        async def initialize(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_module, "MflowBridge", DummyMflowBridge)
+    caplog.set_level(logging.INFO, logger="agent.app")
+
+    asyncio.run(build_channel_apps_async(config_dir / "agent.yaml", testing=True))
+
+    assert "event=runtime_build_started runtime=feishu-main" in caplog.text
+    assert "event=runtime_build_started runtime=feishu-ops" in caplog.text
+    assert "event=provider_manager_ready" in caplog.text
+    assert "event=mflow_bridge_ready" in caplog.text
+    assert "event=app_bootstrap_completed" in caplog.text
 

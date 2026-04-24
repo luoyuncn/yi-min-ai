@@ -98,7 +98,7 @@ class MflowBridge:
         self._seed_base_environment()
 
         try:
-            self._mflow = importlib.import_module("m_flow")
+            self._mflow = _import_mflow_sdk_preserving_host_logging()
             self._sdk_available = True
             logger.info("M-flow SDK imported successfully")
         except ImportError:
@@ -389,3 +389,44 @@ def _should_force_openai_compatible_embedding_encoding_format(
 
     host = urlsplit(api_base).netloc.lower()
     return bool(host) and not host.endswith("openai.com")
+
+
+def _import_mflow_sdk_preserving_host_logging() -> Any:
+    """导入 m_flow 后补回宿主进程已有的日志 handler。"""
+
+    root_logger = logging.getLogger()
+    original_handlers = tuple(root_logger.handlers)
+    original_level = root_logger.level
+    module = importlib.import_module("m_flow")
+    _restore_missing_root_handlers(root_logger, original_handlers, original_level)
+    return module
+
+
+def _restore_missing_root_handlers(
+    root_logger: logging.Logger,
+    original_handlers: tuple[logging.Handler, ...],
+    original_level: int,
+) -> None:
+    for handler in original_handlers:
+        if _root_logger_has_equivalent_handler(root_logger, handler):
+            continue
+        if handler.level == logging.NOTSET and original_level != logging.NOTSET:
+            handler.setLevel(original_level)
+        root_logger.addHandler(handler)
+
+
+def _root_logger_has_equivalent_handler(root_logger: logging.Logger, target: logging.Handler) -> bool:
+    return any(_handlers_are_equivalent(existing, target) for existing in root_logger.handlers)
+
+
+def _handlers_are_equivalent(left: logging.Handler, right: logging.Handler) -> bool:
+    if left is right:
+        return True
+
+    if isinstance(left, logging.FileHandler) and isinstance(right, logging.FileHandler):
+        return getattr(left, "baseFilename", None) == getattr(right, "baseFilename", None)
+
+    if isinstance(left, logging.StreamHandler) and isinstance(right, logging.StreamHandler):
+        return getattr(left, "stream", None) is getattr(right, "stream", None)
+
+    return False
