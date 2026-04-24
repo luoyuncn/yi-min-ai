@@ -48,3 +48,25 @@ def test_stage1_registry_can_render_tool_index(tmp_path) -> None:
     assert "- ledger_upsert_draft:" in tool_index
     assert "- note_add:" in tool_index
     assert "- web_search:" in tool_index
+
+
+def test_stage1_registry_only_registers_recall_memory_when_mflow_is_available(tmp_path) -> None:
+    """recall_memory 只应在 M-flow 已可用时暴露给模型。"""
+
+    unavailable_registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+        mflow_bridge=type("Bridge", (), {"is_available": False})(),
+    )
+    available_registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+        mflow_bridge=type("Bridge", (), {"is_available": True})(),
+    )
+
+    assert "recall_memory" not in unavailable_registry.names()
+    assert "recall_memory" in available_registry.names()

@@ -1,6 +1,7 @@
 """面向 Always-On Memory 和 M-flow 的工具函数。"""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 
 def memory_write(always_on_memory, content: str) -> str:
@@ -27,23 +28,21 @@ def recall_memory(mflow_bridge, question: str, top_k: int = 3) -> str:
     """
     _require_dependency(mflow_bridge, "MflowBridge")
 
-    # M-flow query 是异步的，需要在当前事件循环中执行
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果在异步上下文中，直接 await
-            import inspect
-            if inspect.iscoroutinefunction(recall_memory):
-                bundles = asyncio.create_task(mflow_bridge.query(question, top_k))
-            else:
-                # 同步调用，创建新任务
-                bundles = asyncio.run_coroutine_threadsafe(
-                    mflow_bridge.query(question, top_k), loop
-                ).result(timeout=10)
-        else:
-            bundles = asyncio.run(mflow_bridge.query(question, top_k))
+        asyncio.get_running_loop()
     except Exception as e:
-        return f"Memory retrieval failed: {str(e)}"
+        try:
+            bundles = asyncio.run(mflow_bridge.query(question, top_k))
+        except Exception as inner_exc:
+            return f"Memory retrieval failed: {str(inner_exc)}"
+    else:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                bundles = executor.submit(
+                    lambda: asyncio.run(mflow_bridge.query(question, top_k))
+                ).result(timeout=10)
+        except Exception as inner_exc:
+            return f"Memory retrieval failed: {str(inner_exc)}"
 
     if not bundles:
         return "No relevant memories found."

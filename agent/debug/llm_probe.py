@@ -13,8 +13,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Callable
 
-from agent.app import _load_environment_files
-from agent.config import load_settings
+from agent.config import load_environment_files, load_settings
 from agent.core.llm_factory import LLMFactory
 from agent.core.provider import LLMRequest
 from agent.core.provider_manager import ProviderManager
@@ -238,7 +237,7 @@ async def main_async(argv: list[str] | None = None) -> int:
     _configure_logging(args.log_level)
 
     config_path = Path(args.config).resolve()
-    _load_environment_files(config_path)
+    load_environment_files(config_path)
     settings = load_settings(config_path)
 
     runtime_config = build_probe_config(

@@ -284,7 +284,7 @@ def build_stage1_registry(
     )
 
     # M-flow 深度检索（可选）
-    if mflow_bridge is not None:
+    if mflow_bridge is not None and getattr(mflow_bridge, "is_available", False):
         registry.register(
             ToolDefinition(
                 name="recall_memory",

@@ -1,6 +1,7 @@
 """FeishuAdapter 回归测试。"""
 
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 
@@ -119,3 +120,119 @@ def test_feishu_adapter_builds_lark_markdown_card() -> None:
     assert card["elements"][0]["text"]["tag"] == "lark_md"
     assert "👀 已收到" in card["elements"][0]["text"]["content"]
     assert "**加粗**" in card["elements"][0]["text"]["content"]
+
+
+def test_feishu_adapter_converts_markdown_tables_to_bullets_for_cards() -> None:
+    """飞书卡片应把 Markdown 表格降级成稳定可读的列表文本。"""
+
+    adapter = FeishuAdapter.__new__(FeishuAdapter)
+
+    card = adapter._build_markdown_card(
+        "| 时间 | 商家 | 金额 |\n|------|------|------|\n| 早餐 | Tims | ¥15.00 |\n| 午餐 | 老乡鸡 | ¥27.00 |"
+    )
+
+    content = card["elements"][0]["text"]["content"]
+
+    assert "|------|" not in content
+    assert "- 时间：早餐；商家：Tims；金额：¥15.00" in content
+    assert "- 时间：午餐；商家：老乡鸡；金额：¥27.00" in content
+
+
+def test_feishu_adapter_ignores_duplicate_message_ids() -> None:
+    """同一条飞书消息重复投递时，只应入队一次。"""
+
+    adapter = FeishuAdapter.__new__(FeishuAdapter)
+    adapter.app_id = "app-id"
+    adapter.adapter_id = "feishu-main"
+    adapter._message_queue = asyncio.Queue()
+
+    event = SimpleNamespace(
+        sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="user-open-id")),
+        message=SimpleNamespace(
+            message_id="om-msg-1",
+            chat_id="chat-1",
+            chat_type="p2p",
+            message_type="text",
+            content=json.dumps({"text": "你好"}, ensure_ascii=False),
+            create_time="1713933600000",
+        ),
+    )
+    data = SimpleNamespace(event=event)
+
+    adapter._on_message_receive(data)
+    adapter._on_message_receive(data)
+
+    assert adapter._message_queue.qsize() == 1
+
+
+def test_feishu_adapter_accepts_distinct_message_ids() -> None:
+    """不同 message_id 的消息不应被误判为重复。"""
+
+    adapter = FeishuAdapter.__new__(FeishuAdapter)
+    adapter.app_id = "app-id"
+    adapter.adapter_id = "feishu-main"
+    adapter._message_queue = asyncio.Queue()
+
+    def build_data(message_id: str, text: str):
+        return SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="user-open-id")),
+                message=SimpleNamespace(
+                    message_id=message_id,
+                    chat_id="chat-1",
+                    chat_type="p2p",
+                    message_type="text",
+                    content=json.dumps({"text": text}, ensure_ascii=False),
+                    create_time="1713933600000",
+                ),
+            )
+        )
+
+    adapter._on_message_receive(build_data("om-msg-1", "第一条"))
+    adapter._on_message_receive(build_data("om-msg-2", "第二条"))
+
+    assert adapter._message_queue.qsize() == 2
+
+
+def test_feishu_adapter_extracts_text_from_post_message_with_link() -> None:
+    """带链接的富文本消息也应被提取出可读正文，而不是被直接忽略。"""
+
+    adapter = FeishuAdapter.__new__(FeishuAdapter)
+    adapter.app_id = "app-id"
+    adapter.adapter_id = "feishu-main"
+    adapter._message_queue = asyncio.Queue()
+
+    post_content = {
+        "zh_cn": {
+            "title": "",
+            "content": [
+                [
+                    {"tag": "text", "text": "BaseUrl: "},
+                    {
+                        "tag": "a",
+                        "text": "https://api.deepseek.com",
+                        "href": "https://api.deepseek.com",
+                    },
+                ]
+            ],
+        }
+    }
+    data = SimpleNamespace(
+        event=SimpleNamespace(
+            sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="user-open-id")),
+            message=SimpleNamespace(
+                message_id="om-msg-post-1",
+                chat_id="chat-1",
+                chat_type="p2p",
+                message_type="post",
+                content=json.dumps(post_content, ensure_ascii=False),
+                create_time="1713933600000",
+            ),
+        )
+    )
+
+    adapter._on_message_receive(data)
+
+    assert adapter._message_queue.qsize() == 1
+    normalized = adapter._message_queue.get_nowait()
+    assert normalized.body == "BaseUrl: https://api.deepseek.com"

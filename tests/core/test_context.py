@@ -69,3 +69,26 @@ def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
     assert "[SKILL INDEX]" in system_content
     assert "note-taking: save durable facts" in system_content
 
+
+def test_context_assembler_includes_feishu_rendering_hint() -> None:
+    """飞书渠道应显式提示避免使用 Markdown 表格。"""
+
+    assembler = ContextAssembler(system_prompt="You are Yi Min.")
+
+    context = assembler.assemble(
+        soul_text="# Identity\nYi Min",
+        memory_text="# User Profile\n- prefers python",
+        tool_index="Available Tools:\n- ledger_summary: Summarize entries",
+        skill_index="Available Skills:\n- bookkeeping: record ledger entries",
+        history=[],
+        user_message="帮我总结今天餐饮支出",
+        channel="feishu",
+        channel_instance="feishu-main",
+    )
+
+    system_content = context[0]["content"]
+
+    assert "[CHANNEL CONTEXT]" in system_content
+    assert "Current channel: feishu/feishu-main" in system_content
+    assert "Avoid Markdown tables" in system_content
+

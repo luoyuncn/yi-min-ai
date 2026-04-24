@@ -12,19 +12,22 @@ from agent.web.events import (
     AssistantTextStartEvent,
     RunFinishedEvent,
     RunStartedEvent,
+    ToolCallArgsEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 
 
 class FakeFeishuAdapter:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, object]] = []
 
-    async def reply_markdown(self, source_message_id: str, markdown: str, *, status: str | None = None) -> str:
-        self.calls.append(("reply_markdown", source_message_id, f"{status or ''}|{markdown}"))
+    async def reply_card(self, source_message_id: str, card: dict) -> str:
+        self.calls.append(("reply_card", source_message_id, card))
         return "bot-msg-1"
 
-    async def update_markdown(self, message_id: str, markdown: str, *, status: str | None = None) -> None:
-        self.calls.append(("update_markdown", message_id, f"{status or ''}|{markdown}"))
+    async def update_card(self, message_id: str, card: dict) -> None:
+        self.calls.append(("update_card", message_id, card))
 
 
 class FakeCore:
@@ -41,7 +44,7 @@ class FakeCore:
 
 
 def test_gateway_server_feishu_replies_with_ack_then_updates_markdown() -> None:
-    """飞书通道应先回复收到，再把最终答案更新到同一条卡片消息。"""
+    """飞书通道应先回复结构化占位卡，再更新为最终结构化卡片。"""
 
     gateway = GatewayServer(SimpleNamespace(core=FakeCore()))
     adapter = FakeFeishuAdapter()
@@ -60,12 +63,11 @@ def test_gateway_server_feishu_replies_with_ack_then_updates_markdown() -> None:
     result = asyncio.run(gateway._handle_message(message))
 
     assert result == "**你好**\n\n- 能力 A"
-    assert adapter.calls[0] == ("reply_markdown", "src-msg-1", "👀 已收到，正在思考…|")
-    assert adapter.calls[1] == (
-        "update_markdown",
-        "bot-msg-1",
-        "|**你好**\n\n- 能力 A",
-    )
+    assert adapter.calls[0][0] == "reply_card"
+    assert adapter.calls[0][1] == "src-msg-1"
+    assert adapter.calls[0][2]["header"]["title"]["content"] == "Yi Min 正在处理"
+    assert adapter.calls[1][0] == "update_card"
+    assert adapter.calls[1][2]["header"]["title"]["content"] == "Yi Min 回复"
 
 
 class FakeStreamingCore:
@@ -102,10 +104,11 @@ def test_gateway_server_feishu_updates_card_during_streaming_output() -> None:
     result = asyncio.run(gateway._handle_message(message))
 
     assert result == "第一段\n第二段"
-    assert adapter.calls[0] == ("reply_markdown", "src-msg-2", "👀 已收到，正在思考…|")
-    assert adapter.calls[1] == ("update_markdown", "bot-msg-1", "✍️ 正在输出…|第一段")
-    assert adapter.calls[2] == ("update_markdown", "bot-msg-1", "✍️ 正在输出…|第一段\n第二段")
-    assert adapter.calls[3] == ("update_markdown", "bot-msg-1", "|第一段\n第二段")
+    assert adapter.calls[0][0] == "reply_card"
+    assert adapter.calls[1][0] == "update_card"
+    assert adapter.calls[1][2]["header"]["title"]["content"] == "Yi Min 正在输出"
+    assert adapter.calls[2][2]["header"]["title"]["content"] == "Yi Min 正在输出"
+    assert adapter.calls[3][2]["header"]["title"]["content"] == "Yi Min 回复"
 
 
 def test_gateway_server_logs_feishu_processing_timeline(caplog) -> None:
@@ -181,5 +184,129 @@ def test_gateway_server_routes_messages_to_runtime_specific_app_and_adapter() ->
 
     assert result == "来自 运维"
     assert default_adapter.calls == []
-    assert ops_adapter.calls[0] == ("reply_markdown", "src-ops-1", "👀 已收到，正在思考…|")
-    assert ops_adapter.calls[1] == ("update_markdown", "bot-msg-1", "|来自 运维")
+    assert ops_adapter.calls[0][0] == "reply_card"
+    assert ops_adapter.calls[0][1] == "src-ops-1"
+    assert ops_adapter.calls[1][0] == "update_card"
+    assert ops_adapter.calls[1][2]["elements"][0]["elements"][0]["content"].startswith("你：")
+
+
+class FakeArchive:
+    def __init__(self, reserve_results: list[bool]) -> None:
+        self.reserve_results = list(reserve_results)
+        self.reserve_calls: list[dict] = []
+        self.status_calls: list[dict] = []
+
+    def reserve_inbound_message(self, **kwargs):
+        self.reserve_calls.append(kwargs)
+        return self.reserve_results.pop(0)
+
+    def mark_channel_message_status(self, **kwargs):
+        self.status_calls.append(kwargs)
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.messages: list[NormalizedMessage] = []
+
+    async def enqueue(self, message: NormalizedMessage) -> None:
+        self.messages.append(message)
+
+
+class FakeReceivingAdapter:
+    def __init__(self, messages: list[NormalizedMessage]) -> None:
+        self._messages = list(messages)
+
+    async def receive(self):
+        for message in self._messages:
+            yield message
+
+
+def test_gateway_server_drops_duplicate_message_before_enqueue() -> None:
+    """同一条飞书消息若已在归档中登记，不应再次进入执行队列。"""
+
+    archive = FakeArchive([True, False])
+    gateway = GatewayServer(SimpleNamespace(core=SimpleNamespace(session_archive=archive)))
+    gateway.command_queue = FakeQueue()
+    gateway._running = True
+
+    duplicate_a = NormalizedMessage(
+        message_id="om-msg-duplicate",
+        session_id="chat-duplicate",
+        sender="user-duplicate",
+        body="我今天中午吃啥了",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu-main",
+        metadata={"source_message_id": "om-msg-duplicate"},
+    )
+    duplicate_b = NormalizedMessage(
+        message_id="om-msg-duplicate",
+        session_id="chat-duplicate",
+        sender="user-duplicate",
+        body="我今天中午吃啥了",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu-main",
+        metadata={"source_message_id": "om-msg-duplicate"},
+    )
+    adapter = FakeReceivingAdapter([duplicate_a, duplicate_b])
+
+    asyncio.run(gateway._receive_loop("feishu-main", adapter))
+
+    assert len(archive.reserve_calls) == 2
+    assert [message.message_id for message in gateway.command_queue.messages] == ["om-msg-duplicate"]
+
+
+class FakeLedgerCore:
+    async def run_events(self, message):
+        yield RunStartedEvent(thread_id=message.session_id, run_id=message.message_id)
+        yield ToolCallStartEvent(tool_call_id="tool-1", tool_call_name="ledger_upsert_draft")
+        yield ToolCallArgsEvent(
+            tool_call_id="tool-1",
+            delta='{"thread_id":"default","direction":"expense","amount_cent":2700,"currency":"CNY","category":"meal","occurred_at":"2026-04-24T12:30:00+08:00","merchant":"老乡鸡","note":"酸菜鱼、鸡腿、狮子头"}',
+        )
+        yield ToolCallResultEvent(
+            message_id="tool-msg-1",
+            tool_call_id="tool-1",
+            content="ok",
+        )
+        yield AssistantTextStartEvent(message_id="assistant-ledger")
+        yield AssistantTextDeltaEvent(message_id="assistant-ledger", delta="午餐草稿已创建。需要我提交吗？")
+        yield AssistantTextEndEvent(message_id="assistant-ledger")
+        yield RunFinishedEvent(
+            thread_id=message.session_id,
+            run_id=message.message_id,
+            result_text="午餐草稿已创建。需要我提交吗？",
+        )
+
+
+def test_gateway_server_renders_ledger_scene_as_structured_card() -> None:
+    """记账场景应输出专门的结构化卡片，而不是普通文本块。"""
+
+    gateway = GatewayServer(SimpleNamespace(core=FakeLedgerCore()))
+    gateway._feishu_patch_interval_secs = 0.0
+    adapter = FakeFeishuAdapter()
+    gateway.adapters["feishu"] = adapter
+
+    message = NormalizedMessage(
+        message_id="run-ledger-1",
+        session_id="chat-ledger-1",
+        sender="user-ledger",
+        body="我中午吃了老乡鸡，27块钱",
+        attachments=[],
+        channel="feishu",
+        metadata={"source_message_id": "src-ledger-1"},
+    )
+
+    result = asyncio.run(gateway._handle_message(message))
+
+    assert result == "午餐草稿已创建。需要我提交吗？"
+    final_card = adapter.calls[-1][2]
+    assert final_card["header"]["title"]["content"] == "记账确认"
+    field_texts = [
+        field["text"]["content"]
+        for element in final_card["elements"]
+        if element.get("tag") == "div"
+        for field in element.get("fields", [])
+    ]
+    assert any("老乡鸡" in text and "¥27.00" in text for text in field_texts)

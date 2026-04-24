@@ -6,6 +6,8 @@
 3. 不把原始 `KeyError`、`YAMLError` 等低层异常直接漏给上层
 """
 
+import os
+import re
 from pathlib import Path
 
 import yaml
@@ -14,6 +16,8 @@ from agent.config.models import (
     AgentSettings,
     ChannelInstanceSettings,
     ChannelSettings,
+    MflowEmbeddingSettings,
+    MflowSettings,
     ProviderConfigItem,
     ProviderSettings,
     Settings,
@@ -26,6 +30,9 @@ class ConfigError(ValueError):
     这样上层只需要捕获一种异常，就能处理“文件缺失 / YAML 损坏 / 字段缺失”
     这些一期会遇到的配置问题。
     """
+
+
+_ENV_TOKEN_PATTERN = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
 
 def load_settings(agent_config_path: Path) -> Settings:
@@ -43,7 +50,11 @@ def load_settings(agent_config_path: Path) -> Settings:
     raw = _read_yaml(config_path)
     agent_section = _require_mapping(raw, "agent")
     provider_section = _require_mapping(raw, "providers")
-    provider_path = (config_dir / _require_str(provider_section, "config_file", "providers")).resolve()
+    provider_path = _resolve_path(
+        config_dir,
+        _require_str(provider_section, "config_file", "providers"),
+        field_name="providers.config_file",
+    )
     provider_raw = _read_yaml(provider_path)
     provider_items_raw = provider_raw.get("providers")
 
@@ -61,7 +72,11 @@ def load_settings(agent_config_path: Path) -> Settings:
     return Settings(
         agent=AgentSettings(
             name=_require_str(agent_section, "name", "agent"),
-            workspace_dir=(config_dir / _require_str(agent_section, "workspace_dir", "agent")).resolve(),
+            workspace_dir=_resolve_path(
+                config_dir,
+                _require_str(agent_section, "workspace_dir", "agent"),
+                field_name="agent.workspace_dir",
+            ),
             max_iterations=_require_int(agent_section, "max_iterations", "agent"),
         ),
         providers=ProviderSettings(
@@ -70,6 +85,11 @@ def load_settings(agent_config_path: Path) -> Settings:
             items=provider_items,
         ),
         channels=_build_channel_settings(_optional_mapping(raw, "channels"), config_dir),
+        mflow=_build_mflow_settings(
+            _optional_mapping(raw, "mflow"),
+            config_dir=config_dir,
+            provider_names=provider_names,
+        ),
     )
 
 
@@ -89,6 +109,29 @@ def _read_yaml(path: Path) -> dict:
     if not isinstance(data, dict):
         raise ConfigError(f"{path.name} must contain a top-level mapping")
     return data
+
+
+def _resolve_path(config_dir: Path, raw_path: str, *, field_name: str) -> Path:
+    """解析带环境变量占位符的路径字段。"""
+
+    expanded = _expand_env_tokens(raw_path, field_name=field_name)
+    return (config_dir / Path(expanded).expanduser()).resolve()
+
+
+def _expand_env_tokens(raw_value: str, *, field_name: str) -> str:
+    """展开 `${VAR}` 或 `${VAR:-fallback}` 形式的环境变量。"""
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group("name")
+        default = match.group("default")
+        resolved = os.environ.get(name)
+        if resolved not in {None, ""}:
+            return resolved
+        if default is not None:
+            return default
+        raise ConfigError(f"{field_name} references unset environment variable: {name}")
+
+    return _ENV_TOKEN_PATTERN.sub(replace, raw_value)
 
 
 def _require_mapping(data: dict, key: str) -> dict:
@@ -165,6 +208,17 @@ def _optional_str(data: dict, key: str) -> str | None:
     return value
 
 
+def _optional_bool(data: dict, key: str) -> bool | None:
+    """读取可选布尔值，不存在时返回 None。"""
+
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} must be a boolean if provided")
+    return value
+
+
 def _build_provider_item(item: object, index: int) -> ProviderConfigItem:
     """把 provider 原始字典转换成强类型对象。"""
 
@@ -213,9 +267,72 @@ def _build_channel_instance(item: object, index: int, config_dir: Path) -> Chann
     return ChannelInstanceSettings(
         name=_require_str(item, "name", f"channels.instances[{index}]"),
         channel_type=_require_str(item, "type", f"channels.instances[{index}]"),
-        workspace_dir=(
-            config_dir / _require_str(item, "workspace_dir", f"channels.instances[{index}]")
-        ).resolve(),
+        workspace_dir=_resolve_path(
+            config_dir,
+            _require_str(item, "workspace_dir", f"channels.instances[{index}]"),
+            field_name=f"channels.instances[{index}].workspace_dir",
+        ),
         app_id_env=_optional_str(item, "app_id_env"),
         app_secret_env=_optional_str(item, "app_secret_env"),
+    )
+
+
+def _build_mflow_settings(
+    data: dict | None,
+    *,
+    config_dir: Path,
+    provider_names: set[str],
+) -> MflowSettings:
+    """解析可选的 M-flow 配置。"""
+
+    if data is None:
+        return MflowSettings()
+
+    enabled = _optional_bool(data, "enabled")
+    llm_provider_name = _optional_str(data, "llm_provider_name")
+    if llm_provider_name is not None and llm_provider_name not in provider_names:
+        raise ConfigError("mflow.llm_provider_name must match a configured provider name")
+
+    data_dir_text = _optional_str(data, "data_dir")
+    data_dir = (
+        _resolve_path(config_dir, data_dir_text, field_name="mflow.data_dir")
+        if data_dir_text is not None
+        else None
+    )
+    graph_database_provider = _optional_str(data, "graph_database_provider") or "kuzu"
+    vector_db_provider = _optional_str(data, "vector_db_provider") or "lancedb"
+
+    return MflowSettings(
+        enabled=True if enabled is None else enabled,
+        data_dir=data_dir,
+        dataset_name=_optional_str(data, "dataset_name"),
+        llm_provider_name=llm_provider_name,
+        graph_database_provider=graph_database_provider,
+        vector_db_provider=vector_db_provider,
+        embedding=_build_mflow_embedding_settings(_optional_mapping(data, "embedding"), provider_names),
+    )
+
+
+def _build_mflow_embedding_settings(
+    data: dict | None,
+    provider_names: set[str],
+) -> MflowEmbeddingSettings | None:
+    """解析 M-flow embedding 配置。"""
+
+    if data is None:
+        return None
+
+    provider_name = _optional_str(data, "provider_name")
+    if provider_name is not None and provider_name not in provider_names:
+        raise ConfigError("mflow.embedding.provider_name must match a configured provider name")
+
+    return MflowEmbeddingSettings(
+        provider_name=provider_name,
+        provider_type=_optional_str(data, "provider_type"),
+        model=_optional_str(data, "model"),
+        api_key_env=_optional_str(data, "api_key_env"),
+        base_url=_optional_str(data, "base_url"),
+        api_version=_optional_str(data, "api_version"),
+        dimensions=_optional_int(data, "dimensions"),
+        batch_size=_optional_int(data, "batch_size"),
     )

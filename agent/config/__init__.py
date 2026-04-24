@@ -7,11 +7,14 @@
 这样后面读 `build_app()` 时，会更容易看懂配置是怎么流入运行时的。
 """
 
+from agent.config.environment import load_environment_files
 from agent.config.loader import ConfigError, load_settings
 from agent.config.models import (
     AgentSettings,
     ChannelInstanceSettings,
     ChannelSettings,
+    MflowEmbeddingSettings,
+    MflowSettings,
     ProviderConfigItem,
     ProviderSettings,
     Settings,
@@ -22,8 +25,11 @@ __all__ = [
     "ChannelInstanceSettings",
     "ChannelSettings",
     "ConfigError",
+    "MflowEmbeddingSettings",
+    "MflowSettings",
     "ProviderConfigItem",
     "ProviderSettings",
     "Settings",
+    "load_environment_files",
     "load_settings",
 ]

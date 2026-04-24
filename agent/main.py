@@ -15,6 +15,7 @@ from pathlib import Path
 import click
 
 from agent.observability.logging import setup_logging
+from agent.runtime_paths import resolve_base_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def main(
     """
 
     # 初始化日志
-    workspace_dir = Path("workspace")
+    workspace_dir = resolve_base_workspace(Path(config))
     workspace_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = workspace_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -198,12 +199,11 @@ async def _run_gateway(
     from agent.gateway.server import GatewayServer
     from agent.scheduler import HeartbeatScheduler, CronScheduler
 
-    workspace_dir = Path("workspace")
-
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
     settings, apps = await build_channel_apps_async(config_path, testing=testing)
     default_app = apps.get("default") or next(iter(apps.values()))
+    workspace_dir = settings.agent.workspace_dir
     logger.info("✓ Agent 应用加载完成")
 
     # 2. 初始化 Gateway
@@ -326,12 +326,11 @@ async def _run_all(
     from agent.gateway.server import GatewayServer
     from agent.scheduler import HeartbeatScheduler, CronScheduler
 
-    workspace_dir = Path("workspace")
-
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
     settings, apps = await build_channel_apps_async(config_path, testing=testing)
     app_instance = apps.get("default") or next(iter(apps.values()))
+    workspace_dir = settings.agent.workspace_dir
     logger.info("✓ Agent 应用加载完成")
 
     # 2. 初始化 Gateway

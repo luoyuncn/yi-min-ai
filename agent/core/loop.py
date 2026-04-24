@@ -158,6 +158,8 @@ class AgentCore:
                 skill_index=self.skill_loader.get_index(),
                 history=session.history,
                 user_message=message.body,
+                channel=message.channel,
+                channel_instance=message.channel_instance,
             )
             logger.info(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "

@@ -5,7 +5,27 @@ agent:
 
 providers:
   config_file: "providers.yaml"
-  default_primary: "deepseek"
+  default_primary: "qwen"
+
+# Optional M-flow runtime config.
+# If omitted, M-flow still tries to use the primary provider for LLM,
+# but embedding should be configured explicitly for production use.
+#
+mflow:
+  enabled: true
+  # Omit data_dir to store M-flow data inside each workspace at `workspace_dir/mflow_data`.
+  # Defaults to the current workspace directory name when omitted.
+  dataset_name: "workspace"
+  # Defaults to providers.default_primary when omitted.
+  llm_provider_name: "qwen"
+  embedding:
+    # Reuse an existing provider's api_key/base_url, then override the model.
+    provider_name: "qwen"
+    model: "text-embedding-v4"
+    # Optional explicit overrides:
+    # api_key_env: "DASHSCOPE_API_KEY"
+    # base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # dimensions: 1024
 
 channels:
   instances:

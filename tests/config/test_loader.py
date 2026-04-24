@@ -277,3 +277,98 @@ def test_load_settings_parses_channel_instances_with_independent_workspaces(tmp_
     assert settings.channels.instances[0].workspace_dir == channel_a_workspace.resolve()
     assert settings.channels.instances[1].workspace_dir == channel_b_workspace.resolve()
 
+
+def test_load_settings_parses_mflow_embedding_configuration(tmp_path: Path) -> None:
+    """M-flow 配置应能独立解析，并支持 embedding provider 引用。"""
+
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    mflow_dir = tmp_path / "mflow-store"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+    mflow_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: deepseek\n"
+        "mflow:\n"
+        "  enabled: true\n"
+        "  data_dir: ../mflow-store\n"
+        "  dataset_name: workspace-memory\n"
+        "  llm_provider_name: deepseek\n"
+        "  embedding:\n"
+        "    provider_name: qwen\n"
+        "    model: text-embedding-v4\n"
+        "    dimensions: 1024\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: deepseek\n"
+        "    type: openai\n"
+        "    model: deepseek-v4-flash\n"
+        "    api_key_env: DEEPSEEK_API_KEY\n"
+        "    base_url: https://api.deepseek.com/v1\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: DASHSCOPE_API_KEY\n"
+        "    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.mflow is not None
+    assert settings.mflow.enabled is True
+    assert settings.mflow.data_dir == mflow_dir.resolve()
+    assert settings.mflow.dataset_name == "workspace-memory"
+    assert settings.mflow.llm_provider_name == "deepseek"
+    assert settings.mflow.embedding is not None
+    assert settings.mflow.embedding.provider_name == "qwen"
+    assert settings.mflow.embedding.model == "text-embedding-v4"
+    assert settings.mflow.embedding.dimensions == 1024
+
+
+def test_load_settings_expands_environment_variables_in_path_fields(tmp_path: Path, monkeypatch) -> None:
+    """路径字段应支持 `${VAR:-fallback}` 形式的环境变量展开。"""
+
+    config_dir = tmp_path / "config"
+    state_root = tmp_path / "state-root"
+    config_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ${YIMIN_DATA_ROOT:-../fallback}/default\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: deepseek\n"
+        "mflow:\n"
+        "  enabled: true\n"
+        "  data_dir: ${YIMIN_DATA_ROOT:-../fallback}/mflow\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: deepseek\n"
+        "    type: openai\n"
+        "    model: deepseek-v4-flash\n"
+        "    api_key_env: DEEPSEEK_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("YIMIN_DATA_ROOT", str(state_root))
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.agent.workspace_dir == (state_root / "default").resolve()
+    assert settings.mflow is not None
+    assert settings.mflow.data_dir == (state_root / "mflow").resolve()
+

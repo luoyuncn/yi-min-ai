@@ -70,6 +70,33 @@ class ChannelSettings:
 
 
 @dataclass(slots=True)
+class MflowEmbeddingSettings:
+    """M-flow embedding 配置。"""
+
+    provider_name: str | None = None
+    provider_type: str | None = None
+    model: str | None = None
+    api_key_env: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    dimensions: int | None = None
+    batch_size: int | None = None
+
+
+@dataclass(slots=True)
+class MflowSettings:
+    """M-flow 运行配置。"""
+
+    enabled: bool = True
+    data_dir: Path | None = None
+    dataset_name: str | None = None
+    llm_provider_name: str | None = None
+    graph_database_provider: str = "kuzu"
+    vector_db_provider: str = "lancedb"
+    embedding: MflowEmbeddingSettings | None = None
+
+
+@dataclass(slots=True)
 class Settings:
     """运行时顶层配置对象。
 
@@ -81,3 +108,4 @@ class Settings:
     agent: AgentSettings
     providers: ProviderSettings
     channels: ChannelSettings | None = None
+    mflow: MflowSettings | None = None

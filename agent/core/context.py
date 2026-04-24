@@ -56,6 +56,9 @@ class ContextAssembler:
         skill_index: str,
         history: list[dict],
         user_message: str,
+        *,
+        channel: str = "cli",
+        channel_instance: str = "default",
     ) -> list[dict]:
         """把所有上下文片段按固定顺序组装起来。"""
 
@@ -70,10 +73,19 @@ class ContextAssembler:
                 f"Timezone: {current_time.tzinfo}",
             ]
         )
+        channel_block_lines = [
+            "[CHANNEL CONTEXT]",
+            f"Current channel: {channel}/{channel_instance}",
+        ]
+        if channel == "feishu":
+            channel_block_lines.append("Avoid Markdown tables. Prefer short paragraphs and flat bullet lists.")
+            channel_block_lines.append("Keep formatting stable in Feishu cards. Do not rely on table rendering.")
+        channel_block = "\n".join(channel_block_lines)
         system_content = "\n\n".join(
             [
                 self.system_prompt,
                 system_time_block,
+                channel_block,
                 "[SOUL.md]",
                 soul_text,
                 "[MEMORY.md]",

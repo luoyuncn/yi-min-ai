@@ -1,0 +1,30 @@
+agent:
+  name: "Yi Min"
+  workspace_dir: "${YIMIN_DATA_ROOT:-../.yimin-data}/default"
+  max_iterations: 8
+
+providers:
+  config_file: "providers.yaml"
+  default_primary: "qwen"
+
+mflow:
+  enabled: true
+  dataset_name: "workspace"
+  llm_provider_name: "qwen"
+  embedding:
+    provider_name: "qwen"
+    model: "text-embedding-v4"
+
+channels:
+  instances:
+    - name: "feishu-main"
+      type: "feishu"
+      workspace_dir: "${YIMIN_DATA_ROOT:-../.yimin-data}/feishu-main"
+      app_id_env: "FEISHU_MAIN_APP_ID"
+      app_secret_env: "FEISHU_MAIN_APP_SECRET"
+
+    - name: "feishu-ops"
+      type: "feishu"
+      workspace_dir: "${YIMIN_DATA_ROOT:-../.yimin-data}/feishu-ops"
+      app_id_env: "FEISHU_MIN_APP_ID"
+      app_secret_env: "FEISHU_MIN_APP_SECRET"

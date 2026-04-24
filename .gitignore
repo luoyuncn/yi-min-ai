@@ -150,6 +150,9 @@ venv.bak/
 
 # Runtime workspace databases
 workspace/*.db
+workspace-*/
+.yimin-data/
+mflow_data/
 
 # Frontend local dependencies and built assets
 frontend/node_modules/
@@ -166,7 +169,8 @@ workspace/*
 !workspace/SOUL.md
 !workspace/MEMORY.md
 !workspace/skills/
-!workspace/skills/**
+workspace/skills/*
+!workspace/skills/.gitkeep
 
 # Spyder project settings
 .spyderproject

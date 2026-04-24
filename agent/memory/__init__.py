@@ -7,7 +7,14 @@
 
 from agent.memory.always_on import AlwaysOnMemory
 from agent.memory.ledger_store import LedgerStore
-from agent.memory.mflow_bridge import MflowBridge, TurnData, EpisodeBundle
+from agent.memory.mflow_bridge import (
+    EpisodeBundle,
+    MflowBridge,
+    MflowEmbeddingConfig,
+    MflowLLMConfig,
+    MflowRuntimeConfig,
+    TurnData,
+)
 from agent.memory.note_store import NoteStore
 from agent.memory.session_archive import SessionArchive
 
@@ -16,6 +23,9 @@ __all__ = [
     "EpisodeBundle",
     "LedgerStore",
     "MflowBridge",
+    "MflowEmbeddingConfig",
+    "MflowLLMConfig",
+    "MflowRuntimeConfig",
     "NoteStore",
     "SessionArchive",
     "TurnData",

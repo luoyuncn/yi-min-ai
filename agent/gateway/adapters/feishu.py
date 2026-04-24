@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import re
 import threading
+import time
 from datetime import UTC, datetime
 from typing import AsyncIterator
 
@@ -34,6 +36,9 @@ class FeishuAdapter:
         self._initialized = False
         self._ws_connected = threading.Event()
         self._ws_connect_timeout_secs = 15.0
+        self._seen_message_ids: dict[str, float] = {}
+        self._seen_message_ids_lock = threading.Lock()
+        self._message_dedupe_ttl_secs = 120.0
 
         # 检查 lark-oapi 是否已安装
         try:
@@ -161,13 +166,15 @@ class FeishuAdapter:
             event = data.event
             message = event.message
 
-            # 仅处理文本消息（一期），后续扩展图片/文件/语音
-            if message.message_type != "text":
-                logger.debug(f"Ignoring non-text message: {message.message_type}")
+            if self._is_duplicate_message(message.message_id):
+                logger.info("Ignoring duplicate Feishu message: %s", message.message_id)
                 return
 
-            content = json.loads(message.content)
-            text = content.get("text", "")
+            content = self._parse_message_content(message.content)
+            text = self._extract_message_text(message.message_type, content)
+            if not text.strip():
+                logger.info("Ignoring unsupported Feishu message type: %s", message.message_type)
+                return
 
             # 群聊中仅响应 @机器人 的消息
             if message.chat_type == "group":
@@ -203,13 +210,103 @@ class FeishuAdapter:
         except Exception as e:
             logger.error(f"Failed to process Feishu message: {e}")
 
+    def _parse_message_content(self, raw_content: str):
+        try:
+            return json.loads(raw_content)
+        except json.JSONDecodeError:
+            return {"text": raw_content}
+
+    def _extract_message_text(self, message_type: str, content) -> str:
+        if message_type == "text" and isinstance(content, dict):
+            return str(content.get("text", "") or "")
+        if message_type == "post":
+            return self._extract_post_text(content)
+        if isinstance(content, dict):
+            return str(content.get("text", "") or "")
+        return ""
+
+    def _extract_post_text(self, content) -> str:
+        if not isinstance(content, dict):
+            return ""
+
+        for locale_payload in content.values():
+            if not isinstance(locale_payload, dict):
+                continue
+
+            lines: list[str] = []
+            title = str(locale_payload.get("title", "") or "").strip()
+            if title:
+                lines.append(title)
+
+            for paragraph in locale_payload.get("content", []) or []:
+                if not isinstance(paragraph, list):
+                    continue
+                parts = [
+                    segment
+                    for segment in (self._extract_post_segment(item) for item in paragraph)
+                    if segment
+                ]
+                if parts:
+                    lines.append("".join(parts))
+
+            if lines:
+                return "\n".join(lines)
+
+        return ""
+
+    def _extract_post_segment(self, item) -> str:
+        if not isinstance(item, dict):
+            return ""
+
+        tag = item.get("tag")
+        if tag == "text":
+            return str(item.get("text", "") or "")
+        if tag == "a":
+            text = str(item.get("text", "") or "").strip()
+            href = str(item.get("href", "") or "").strip()
+            if text and href and text != href:
+                return f"{text} ({href})"
+            return text or href
+        if tag == "at":
+            return str(item.get("user_name", "") or item.get("text", "") or "")
+        return ""
+
+    def _is_duplicate_message(self, message_id: str) -> bool:
+        """在短窗口内按飞书 message_id 去重，避免重复消费同一条消息。"""
+
+        if not hasattr(self, "_seen_message_ids"):
+            self._seen_message_ids = {}
+        if not hasattr(self, "_seen_message_ids_lock"):
+            self._seen_message_ids_lock = threading.Lock()
+        if not hasattr(self, "_message_dedupe_ttl_secs"):
+            self._message_dedupe_ttl_secs = 120.0
+
+        now = time.monotonic()
+        expires_at = now + self._message_dedupe_ttl_secs
+
+        with self._seen_message_ids_lock:
+            expired_ids = [
+                seen_message_id
+                for seen_message_id, deadline in self._seen_message_ids.items()
+                if deadline <= now
+            ]
+            for seen_message_id in expired_ids:
+                self._seen_message_ids.pop(seen_message_id, None)
+
+            existing_deadline = self._seen_message_ids.get(message_id)
+            if existing_deadline is not None and existing_deadline > now:
+                return True
+
+            self._seen_message_ids[message_id] = expires_at
+            return False
+
     async def receive(self) -> AsyncIterator[NormalizedMessage]:
         """接收消息流"""
         while True:
             msg = await self._message_queue.get()
             yield msg
 
-    async def send(self, session_id: str, content: str) -> None:
+    async def send(self, session_id: str, content: str) -> str | None:
         """通过飞书 API 回复消息"""
         if not self._lark_client:
             raise RuntimeError("Feishu client not initialized")
@@ -234,11 +331,49 @@ class FeishuAdapter:
                 logger.error(
                     f"Failed to send Feishu message: {response.code} {response.msg}"
                 )
+                return None
             else:
                 logger.debug(f"Feishu message sent to {session_id}")
+                return getattr(getattr(response, "data", None), "message_id", None)
 
         except Exception as e:
             logger.error(f"Error sending Feishu message: {e}")
+            return None
+
+    async def send_card(self, session_id: str, card: dict) -> str | None:
+        """向会话直接发送一张结构化卡片。"""
+
+        if not self._lark_client:
+            raise RuntimeError("Feishu client not initialized")
+
+        try:
+            request = (
+                self._lark.im.v1.CreateMessageRequest.builder()
+                .receive_id_type("chat_id")
+                .request_body(
+                    self._lark.im.v1.CreateMessageRequestBody.builder()
+                    .receive_id(session_id)
+                    .msg_type("interactive")
+                    .content(json.dumps(card, ensure_ascii=False))
+                    .build()
+                )
+                .build()
+            )
+
+            response = self._lark_client.im.v1.message.create(request)
+
+            if not response.success():
+                logger.error(
+                    f"Failed to send Feishu card: {response.code} {response.msg}"
+                )
+                return None
+
+            logger.debug(f"Feishu card sent to {session_id}")
+            return getattr(getattr(response, "data", None), "message_id", None)
+
+        except Exception as e:
+            logger.error(f"Error sending Feishu card: {e}")
+            return None
 
     async def reply_markdown(
         self,
@@ -249,10 +384,18 @@ class FeishuAdapter:
     ) -> str:
         """回复一条可渲染 Markdown 的卡片消息，并返回新消息 ID。"""
 
+        return await self.reply_card(
+            source_message_id,
+            self._build_markdown_card(markdown, status=status),
+        )
+
+    async def reply_card(self, source_message_id: str, card: dict) -> str:
+        """回复一条结构化飞书卡片，并返回新消息 ID。"""
+
         if not self._lark_client:
             raise RuntimeError("Feishu client not initialized")
 
-        content = json.dumps(self._build_markdown_card(markdown, status=status), ensure_ascii=False)
+        content = json.dumps(card, ensure_ascii=False)
         request = (
             self._lark.im.v1.ReplyMessageRequest.builder()
             .message_id(source_message_id)
@@ -281,10 +424,18 @@ class FeishuAdapter:
     ) -> None:
         """把一条已发送的飞书卡片更新为最新 Markdown 内容。"""
 
+        await self.update_card(
+            message_id,
+            self._build_markdown_card(markdown, status=status),
+        )
+
+    async def update_card(self, message_id: str, card: dict) -> None:
+        """把一条已发送的飞书卡片更新为新的结构化内容。"""
+
         if not self._lark_client:
             raise RuntimeError("Feishu client not initialized")
 
-        content = json.dumps(self._build_markdown_card(markdown, status=status), ensure_ascii=False)
+        content = json.dumps(card, ensure_ascii=False)
         request = (
             self._lark.im.v1.PatchMessageRequest.builder()
             .message_id(message_id)
@@ -306,29 +457,7 @@ class FeishuAdapter:
             raise RuntimeError("Feishu client not initialized")
 
         try:
-            card_content = self._build_card(blocks)
-
-            request = (
-                self._lark.im.v1.CreateMessageRequest.builder()
-                .receive_id_type("chat_id")
-                .request_body(
-                    self._lark.im.v1.CreateMessageRequestBody.builder()
-                    .receive_id(session_id)
-                    .msg_type("interactive")
-                    .content(json.dumps(card_content, ensure_ascii=False))
-                    .build()
-                )
-                .build()
-            )
-
-            response = self._lark_client.im.v1.message.create(request)
-            
-            if not response.success():
-                logger.error(
-                    f"Failed to send Feishu card: {response.code} {response.msg}"
-                )
-            else:
-                logger.debug(f"Feishu card sent to {session_id}")
+            await self.send_card(session_id, self._build_card(blocks))
 
         except Exception as e:
             logger.error(f"Error sending Feishu card: {e}")
@@ -347,7 +476,7 @@ class FeishuAdapter:
         if status:
             sections.append(status)
         if markdown:
-            sections.append(markdown)
+            sections.append(self._normalize_markdown_for_card(markdown))
 
         content = "\n\n".join(part for part in sections if part).strip() or " "
         return self._build_card(
@@ -361,3 +490,47 @@ class FeishuAdapter:
                 }
             ]
         )
+
+    def _normalize_markdown_for_card(self, markdown: str) -> str:
+        """把飞书卡片不稳定的 Markdown 结构降级为更稳的文本。"""
+
+        lines = markdown.splitlines()
+        if not lines:
+            return markdown
+
+        normalized: list[str] = []
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            next_line = lines[index + 1] if index + 1 < len(lines) else ""
+            if "|" in line and self._is_markdown_table_separator(next_line):
+                headers = self._split_table_row(line)
+                index += 2
+                converted_rows: list[str] = []
+                while index < len(lines) and "|" in lines[index]:
+                    cells = self._split_table_row(lines[index])
+                    if len(cells) == len(headers) and cells:
+                        converted_rows.append(
+                            "- " + "；".join(f"{header}：{value}" for header, value in zip(headers, cells))
+                        )
+                    else:
+                        converted_rows.append(lines[index])
+                    index += 1
+                normalized.extend(converted_rows)
+                continue
+
+            normalized.append(line)
+            index += 1
+
+        return "\n".join(normalized)
+
+    def _is_markdown_table_separator(self, line: str) -> bool:
+        return bool(re.fullmatch(r"\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*", line))
+
+    def _split_table_row(self, line: str) -> list[str]:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [cell.strip() for cell in stripped.split("|")]

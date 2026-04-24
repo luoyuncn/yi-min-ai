@@ -11,6 +11,7 @@ from agent.app import build_channel_apps_async
 from agent.gateway.instance_lock import InstanceLockError, acquire_instance_lock
 from agent.gateway.server import GatewayServer
 from agent.observability.logging import setup_logging
+from agent.runtime_paths import resolve_base_workspace
 from agent.scheduler import HeartbeatScheduler, CronScheduler
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ async def run_server(
     """异步运行 Gateway 服务器"""
 
     # 1. 初始化日志
-    workspace_dir = Path("workspace")
+    workspace_dir = resolve_base_workspace(config_path)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = workspace_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
