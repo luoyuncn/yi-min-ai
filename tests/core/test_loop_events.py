@@ -78,7 +78,7 @@ def test_run_events_emits_tool_trace(tmp_path: Path) -> None:
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, FakeProviderManager())
@@ -107,7 +107,7 @@ def test_run_events_emits_interrupt_for_approval_required_tool(tmp_path: Path) -
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, ApprovalProviderManager())
     approvals = PendingApprovalStore()
@@ -138,7 +138,7 @@ def test_run_events_can_resume_after_approval(tmp_path: Path) -> None:
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, ApprovalProviderManager())
     approvals = PendingApprovalStore()
@@ -193,7 +193,7 @@ def test_run_events_stops_when_runtime_control_is_interrupted(tmp_path: Path) ->
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, SlowProviderManager())
     control = RunControl(thread_id="thread-stop", run_id="run-stop")
@@ -228,7 +228,7 @@ def test_run_events_streams_multiple_text_deltas_from_provider(tmp_path: Path) -
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, StreamingProviderManager())
     message = NormalizedMessage(
@@ -257,7 +257,7 @@ def test_run_events_logs_first_token_for_streaming_provider(tmp_path: Path, capl
 
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, StreamingProviderManager())
     message = NormalizedMessage(
@@ -279,3 +279,4 @@ def test_run_events_logs_first_token_for_streaming_provider(tmp_path: Path, capl
     log_text = caplog.text
     assert "event=model_first_token" in log_text
     assert "event=model_response_completed" in log_text
+

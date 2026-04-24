@@ -289,7 +289,7 @@ print("DB_EXISTS =", db.exists())
 
 conn = sqlite3.connect(db)
 print("ROW_COUNT =", conn.execute("select count(*) from sessions").fetchone()[0])
-print("FTS_MATCH =", conn.execute("select count(*) from sessions_fts where sessions_fts match 'Atlas'").fetchone()[0])
+print("FTS_MATCH =", conn.execute("select count(*) from sessions_fts where sessions_fts match 'Yi Min'").fetchone()[0])
 '@ | uv run python -
 ```
 
@@ -423,3 +423,4 @@ MCP Client 框架已实现，配置文件：`config/mcp_servers.yaml`。
 2. Approval Flow
 3. Compaction
 4. M-flow 集成
+

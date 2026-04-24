@@ -14,7 +14,7 @@ def write_testing_config(tmp_path: Path) -> Path:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -30,6 +30,7 @@ def write_testing_config(tmp_path: Path) -> Path:
         "    api_key_env: ANTHROPIC_API_KEY\n",
         encoding="utf-8",
     )
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     return config_dir / "agent.yaml"
+

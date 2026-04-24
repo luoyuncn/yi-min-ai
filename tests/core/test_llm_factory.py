@@ -81,7 +81,7 @@ def test_llm_factory_can_build_primary_provider_from_settings() -> None:
 
     settings = Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=Path("/tmp/workspace"),
             max_iterations=8,
         ),
@@ -125,3 +125,4 @@ def test_llm_factory_supports_optional_common_generation_parameters() -> None:
     assert config.temperature == 0.6
     assert config.top_p == 0.8
     assert config.max_output_tokens == 3000
+

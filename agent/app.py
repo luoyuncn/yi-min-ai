@@ -268,7 +268,7 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
     """确保工作区里至少有基础人格和记忆文件。"""
 
     defaults = {
-        "SOUL.md": "# Identity\n你是我的个人助理，名字叫 Atlas。\n",
+        "SOUL.md": "# Identity\n你是我的个人助理，名字叫 Yi Min。\n",
         "MEMORY.md": "# User Profile\n",
     }
     for filename, content in defaults.items():
@@ -344,6 +344,10 @@ def _build_system_prompt(agent_name: str) -> str:
             "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
             "Do not store bookkeeping or note facts in MEMORY.md or arbitrary files unless the user explicitly asks for that format.",
             "Give a short acknowledgement for explicit saves and important automatic note saves; otherwise keep auto-save quiet.",
+            (
+                "When asked about your available tools or skills, answer strictly from the current "
+                "TOOL INDEX and SKILL INDEX in context. Do not claim unavailable capabilities."
+            ),
             f"Process boot local datetime: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
     )

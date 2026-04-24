@@ -30,3 +30,21 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
         "read_skill",
         "web_search",
     }
+
+
+def test_stage1_registry_can_render_tool_index(tmp_path) -> None:
+    """注册表应能生成给模型阅读的工具索引。"""
+
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+    )
+
+    tool_index = registry.get_index()
+
+    assert tool_index.startswith("Available Tools:")
+    assert "- ledger_upsert_draft:" in tool_index
+    assert "- note_add:" in tool_index
+    assert "- web_search:" in tool_index

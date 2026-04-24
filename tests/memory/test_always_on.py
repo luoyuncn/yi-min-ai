@@ -10,10 +10,11 @@ def test_always_on_memory_reads_soul_and_memory(tmp_path: Path) -> None:
 
     soul = tmp_path / "SOUL.md"
     memory = tmp_path / "MEMORY.md"
-    soul.write_text("# Identity\nAtlas\n", encoding="utf-8")
+    soul.write_text("# Identity\nYi Min\n", encoding="utf-8")
     memory.write_text("# User Profile\n- prefers python\n", encoding="utf-8")
 
     store = AlwaysOnMemory(soul_file=soul, memory_file=memory)
 
-    assert "Atlas" in store.load_soul()
+    assert "Yi Min" in store.load_soul()
     assert "prefers python" in store.load_memory()
+

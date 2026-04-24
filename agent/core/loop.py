@@ -58,7 +58,7 @@ class AgentCore:
         note_store: NoteStore | None = None,
         mflow_bridge=None,
         max_iterations: int = 8,
-        system_prompt: str = "You are Atlas.",
+        system_prompt: str = "You are Yi Min.",
     ) -> None:
         # 这些依赖都在 build_app 或测试工厂中注入；
         # AgentCore 自己不负责创建它们，只负责调度它们协作。
@@ -154,6 +154,7 @@ class AgentCore:
             context = self.context_assembler.assemble(
                 soul_text=self.always_on_memory.load_soul(),
                 memory_text=self.always_on_memory.load_memory(),
+                tool_index=self.tool_registry.get_index(),
                 skill_index=self.skill_loader.get_index(),
                 history=session.history,
                 user_message=message.body,

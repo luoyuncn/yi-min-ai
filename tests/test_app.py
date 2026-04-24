@@ -49,7 +49,7 @@ def test_build_provider_manager_only_requires_primary_provider(monkeypatch, tmp_
 
     settings = Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=tmp_path / "workspace",
             max_iterations=8,
         ),
@@ -91,7 +91,7 @@ def test_build_app_loads_api_key_from_root_dotenv(monkeypatch, tmp_path: Path) -
     (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-test-key\n", encoding="utf-8")
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -153,7 +153,7 @@ def test_build_provider_manager_passes_extra_body_to_primary_provider(monkeypatc
 
     settings = Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=tmp_path / "workspace",
             max_iterations=8,
         ),
@@ -200,7 +200,7 @@ def test_build_provider_manager_applies_llm_factory_defaults_for_primary_provide
 
     settings = Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=tmp_path / "workspace",
             max_iterations=8,
         ),
@@ -237,7 +237,7 @@ def test_build_channel_apps_async_uses_runtime_workspace_overrides(tmp_path: Pat
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -283,7 +283,7 @@ def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -322,10 +322,12 @@ def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path
 def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> None:
     """系统提示词应主动引导模型使用账本与长期笔记工具。"""
 
-    prompt = _build_system_prompt("Atlas")
+    prompt = _build_system_prompt("Yi Min")
 
     assert "TOOL ROUTING POLICY" in prompt
     assert "Use ledger tools for bookkeeping requests" in prompt
     assert "Ask follow-up questions before committing incomplete ledger entries" in prompt
     assert "Use note tools for long-lived user facts" in prompt
     assert "Do not store bookkeeping or note facts in MEMORY.md" in prompt
+    assert "When asked about your available tools or skills" in prompt
+

@@ -666,7 +666,7 @@ class CompactionEngine:
 
 ```markdown
 # Identity
-你是我的个人助理，名字叫 Atlas。
+你是我的个人助理，名字叫 Yi Min。
 
 # Communication Style
 - 中文为主，技术术语保留英文
@@ -1270,7 +1270,7 @@ m_flow.query(question, mode="EPISODIC")
 
 ```yaml
 agent:
-  name: "Atlas"
+  name: "Yi Min"
   workspace_dir: "./workspace"
   max_iterations: 25
   compaction_reserve: 4096

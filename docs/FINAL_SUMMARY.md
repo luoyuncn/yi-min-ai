@@ -221,7 +221,7 @@ uv run python -m agent.main --mode cli --testing
 
 **预期：**
 - 显示 Banner
-- 显示 "Atlas CLI is ready"
+- 显示 "Yi Min CLI is ready"
 - 可以输入消息对话
 
 ### 2. Gateway 模式（无飞书）
@@ -444,3 +444,4 @@ python -m agent.main
 ```
 
 🚀 **祝你使用愉快！**
+

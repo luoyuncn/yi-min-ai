@@ -49,6 +49,14 @@ class ToolRegistry:
 
         return [tool.schema for tool in self._tools.values()]
 
+    def get_index(self) -> str:
+        """生成给模型阅读的工具索引。"""
+
+        lines = ["Available Tools:"]
+        for tool in self._tools.values():
+            lines.append(f"- {tool.name}: {tool.description}")
+        return "\n".join(lines)
+
 
 def build_stage1_registry(
     workspace_dir: Path,

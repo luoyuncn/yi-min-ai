@@ -74,7 +74,7 @@ def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -93,7 +93,7 @@ def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -
 
     settings = load_settings(config_dir / "agent.yaml")
 
-    assert settings.agent.name == "Atlas"
+    assert settings.agent.name == "Yi Min"
     assert settings.agent.workspace_dir == workspace_dir.resolve()
     assert settings.providers.default_primary == "claude-sonnet"
     assert settings.providers.items[0].model == "claude-sonnet-4-20250514"
@@ -302,12 +302,12 @@ from agent.memory.always_on import AlwaysOnMemory
 def test_always_on_memory_reads_soul_and_memory(tmp_path: Path) -> None:
     soul = tmp_path / "SOUL.md"
     memory = tmp_path / "MEMORY.md"
-    soul.write_text("# Identity\nAtlas\n", encoding="utf-8")
+    soul.write_text("# Identity\nYi Min\n", encoding="utf-8")
     memory.write_text("# User Profile\n- prefers python\n", encoding="utf-8")
 
     store = AlwaysOnMemory(soul_file=soul, memory_file=memory)
 
-    assert "Atlas" in store.load_soul()
+    assert "Yi Min" in store.load_soul()
     assert "prefers python" in store.load_memory()
 ```
 
@@ -736,10 +736,10 @@ from agent.core.context import ContextAssembler
 
 
 def test_context_assembler_includes_system_memory_skills_history_and_user_message() -> None:
-    assembler = ContextAssembler(system_prompt="You are Atlas.")
+    assembler = ContextAssembler(system_prompt="You are Yi Min.")
 
     context = assembler.assemble(
-        soul_text="# Identity\nAtlas",
+        soul_text="# Identity\nYi Min",
         memory_text="# User Profile\n- prefers python",
         skill_index="Available Skills:\n- daily-briefing: Generate daily briefing",
         history=[{"role": "assistant", "content": "你好"}],
@@ -876,7 +876,7 @@ def test_build_app_wires_a_runnable_cli_agent(tmp_path: Path, monkeypatch) -> No
     workspace = tmp_path / "workspace"
     skills = workspace / "skills"
     skills.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (skills / "daily-briefing").mkdir()
     (skills / "daily-briefing" / "SKILL.md").write_text(
@@ -925,7 +925,7 @@ def main() -> None:
     parser.add_argument("--config", default="config/agent.yaml")
     args = parser.parse_args()
     app = build_app(Path(args.config))
-    print("Atlas CLI is ready. Type 'exit' to quit.")
+    print("Yi Min CLI is ready. Type 'exit' to quit.")
     while True:
         text = input("> ").strip()
         if text in {"exit", "quit"}:
@@ -968,4 +968,5 @@ git commit -m "feat: add runnable cli entrypoint"
 - Keep files under 200 lines where practical; split helpers into domain-specific modules rather than generic utility buckets.
 - Preserve the provider abstraction even though only Anthropic is enabled.
 - Make every task end in a runnable, testable checkpoint; do not leave stubs that require Stage Two to become usable.
+
 

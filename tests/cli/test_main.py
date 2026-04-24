@@ -20,5 +20,6 @@ def test_main_prints_runtime_error_without_traceback(monkeypatch, capsys) -> Non
     cli_main.main()
 
     captured = capsys.readouterr()
-    assert "Atlas CLI is ready" in captured.out
+    assert "Yi Min CLI is ready" in captured.out
     assert "Error: provider boom" in captured.out
+

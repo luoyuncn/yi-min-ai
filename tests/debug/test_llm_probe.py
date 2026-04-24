@@ -12,7 +12,7 @@ from agent.debug.llm_probe import build_probe_config, build_probe_request, probe
 def _build_settings() -> Settings:
     return Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=Path("/tmp/workspace"),
             max_iterations=8,
         ),
@@ -44,7 +44,7 @@ def test_build_probe_config_maps_thinking_override_for_deepseek() -> None:
 
     settings = Settings(
         agent=AgentSettings(
-            name="Atlas",
+            name="Yi Min",
             workspace_dir=Path("/tmp/workspace"),
             max_iterations=8,
         ),
@@ -114,3 +114,4 @@ async def test_probe_manager_collects_latency_and_response_text() -> None:
     assert result.total_seconds == pytest.approx(1.2)
     assert result.text == "你好"
     assert result.usage == {"input_tokens": 3, "output_tokens": 2}
+

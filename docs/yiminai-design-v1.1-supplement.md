@@ -1,4 +1,4 @@
-# Yimin AI Agent 设计补充文档 v1.1
+# Yi Min AI Agent 设计补充文档 v1.1
 
 > **文档版本**: v1.1 补充  
 > **日期**: 2026-04-22  
@@ -1492,7 +1492,7 @@ class CronScheduler:
 
 ```yaml
 agent:
-  name: "Atlas"
+  name: "Yi Min"
   workspace_dir: "./workspace"
   max_iterations: 25
   compaction_reserve: 4096
@@ -1597,3 +1597,4 @@ mcp:
 ---
 
 > *本文档为 v1.0 设计的补充，应与主设计文档一起阅读。*
+

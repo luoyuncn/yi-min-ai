@@ -88,7 +88,7 @@ class FakeProviderManager:
 
 
 def test_run_events_emits_tool_trace(tmp_path) -> None:
-    (tmp_path / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (tmp_path / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (tmp_path / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
     (tmp_path / "skills").mkdir()
     (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
@@ -367,3 +367,4 @@ Expected: app starts locally.
 - Do not add auth, multi-user storage, or CopilotKit frontend code yet.
 - Keep the backend contract protocol-clean so a future frontend can replace the static page without changing `AgentCore`.
 - Preserve the existing CLI entrypoint and tests.
+

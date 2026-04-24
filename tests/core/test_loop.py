@@ -36,7 +36,7 @@ def test_agent_core_can_execute_tool_then_finish(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
 
@@ -79,7 +79,7 @@ def test_agent_core_turns_tool_errors_into_recoverable_tool_messages(tmp_path: P
     workspace = tmp_path / "workspace"
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
 
     message = NormalizedMessage(
@@ -104,7 +104,7 @@ def test_agent_core_logs_timeline_for_model_and_tool_execution(tmp_path: Path, c
     workspace = tmp_path / "workspace"
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
 
@@ -141,7 +141,7 @@ def test_agent_core_ingest_to_mflow_uses_session_history_without_warning(tmp_pat
     workspace = tmp_path / "workspace"
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
     core = AgentCore.build_for_test(workspace, FakeProviderManager())
@@ -169,3 +169,4 @@ def test_agent_core_ingest_to_mflow_uses_session_history_without_warning(tmp_pat
     assert result == "已读取文件"
     assert len(ingested) == 1
     assert "M-flow ingestion failed" not in caplog.text
+

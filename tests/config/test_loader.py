@@ -22,7 +22,7 @@ def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -41,7 +41,7 @@ def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -
 
     settings = load_settings(config_dir / "agent.yaml")
 
-    assert settings.agent.name == "Atlas"
+    assert settings.agent.name == "Yi Min"
     assert settings.agent.workspace_dir == workspace_dir.resolve()
     assert settings.providers.default_primary == "claude-sonnet"
     assert settings.providers.items[0].model == "claude-sonnet-4-20250514"
@@ -87,7 +87,7 @@ def test_load_settings_rejects_unknown_default_primary(tmp_path: Path) -> None:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -118,7 +118,7 @@ def test_load_settings_wraps_missing_provider_file_in_config_error(tmp_path: Pat
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -141,7 +141,7 @@ def test_load_settings_wraps_invalid_yaml_in_config_error(tmp_path: Path) -> Non
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -165,7 +165,7 @@ def test_load_settings_parses_provider_extra_body(tmp_path: Path) -> None:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -199,7 +199,7 @@ def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> 
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -241,7 +241,7 @@ def test_load_settings_parses_channel_instances_with_independent_workspaces(tmp_
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -276,3 +276,4 @@ def test_load_settings_parses_channel_instances_with_independent_workspaces(tmp_
     assert [item.name for item in settings.channels.instances] == ["feishu-main", "feishu-ops"]
     assert settings.channels.instances[0].workspace_dir == channel_a_workspace.resolve()
     assert settings.channels.instances[1].workspace_dir == channel_b_workspace.resolve()
+

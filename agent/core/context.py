@@ -52,6 +52,7 @@ class ContextAssembler:
         self,
         soul_text: str,
         memory_text: str,
+        tool_index: str,
         skill_index: str,
         history: list[dict],
         user_message: str,
@@ -77,6 +78,8 @@ class ContextAssembler:
                 soul_text,
                 "[MEMORY.md]",
                 memory_text,
+                "[TOOL INDEX]",
+                tool_index,
                 "[SKILL INDEX]",
                 skill_index,
             ]

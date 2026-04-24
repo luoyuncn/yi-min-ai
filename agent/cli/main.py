@@ -21,7 +21,7 @@ def main() -> None:
 
     app = build_app(Path(args.config), testing=args.testing)
     # 先打印 ready banner，方便人工验证 CLI 是否正常启动。
-    print("Atlas CLI is ready. Type 'exit' to quit.")
+    print("Yi Min CLI is ready. Type 'exit' to quit.")
 
     while True:
         # 用最简单的 REPL 形式维持一期体验：

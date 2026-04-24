@@ -19,7 +19,7 @@ def test_build_app_wires_a_runnable_cli_agent(tmp_path: Path) -> None:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -35,7 +35,7 @@ def test_build_app_wires_a_runnable_cli_agent(tmp_path: Path) -> None:
         "    api_key_env: ANTHROPIC_API_KEY\n",
         encoding="utf-8",
     )
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (skills / "daily-briefing").mkdir()
     (skills / "daily-briefing" / "SKILL.md").write_text(
@@ -62,7 +62,7 @@ def test_build_app_testing_mode_can_trigger_file_tool(tmp_path: Path) -> None:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -78,7 +78,7 @@ def test_build_app_testing_mode_can_trigger_file_tool(tmp_path: Path) -> None:
         "    api_key_env: ANTHROPIC_API_KEY\n",
         encoding="utf-8",
     )
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
 
@@ -103,7 +103,7 @@ def test_cli_module_runs_and_prints_ready_banner(tmp_path: Path) -> None:
 
     (config_dir / "agent.yaml").write_text(
         "agent:\n"
-        "  name: Atlas\n"
+        "  name: Yi Min\n"
         "  workspace_dir: ../workspace\n"
         "  max_iterations: 8\n"
         "providers:\n"
@@ -119,7 +119,7 @@ def test_cli_module_runs_and_prints_ready_banner(tmp_path: Path) -> None:
         "    api_key_env: ANTHROPIC_API_KEY\n",
         encoding="utf-8",
     )
-    (workspace / "SOUL.md").write_text("# Identity\nAtlas\n", encoding="utf-8")
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
 
     result = subprocess.run(
@@ -137,4 +137,5 @@ def test_cli_module_runs_and_prints_ready_banner(tmp_path: Path) -> None:
         check=True,
     )
 
-    assert "Atlas CLI is ready" in result.stdout
+    assert "Yi Min CLI is ready" in result.stdout
+
