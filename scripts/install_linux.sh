@@ -21,6 +21,46 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+append_env_if_set() {
+  local target_name="$1"
+  local source_name="${2:-$1}"
+  local source_value="${!source_name:-}"
+  if [[ -n "$source_value" ]]; then
+    UV_SYNC_ENV+=("$target_name=$source_value")
+  fi
+}
+
+build_uv_sync_env() {
+  UV_SYNC_ENV=()
+  append_env_if_set UV_DEFAULT_INDEX
+  append_env_if_set UV_DEFAULT_INDEX YIMIN_UV_DEFAULT_INDEX
+  append_env_if_set UV_INDEX
+  append_env_if_set UV_INDEX YIMIN_UV_INDEX
+  append_env_if_set UV_INDEX_URL
+  append_env_if_set UV_EXTRA_INDEX_URL
+  append_env_if_set UV_FIND_LINKS
+  append_env_if_set UV_INDEX_STRATEGY
+  append_env_if_set UV_NATIVE_TLS
+  append_env_if_set UV_NATIVE_TLS YIMIN_UV_NATIVE_TLS
+  append_env_if_set UV_CACHE_DIR
+}
+
+print_uv_sync_failure_help() {
+  echo
+  echo "uv sync failed while downloading Python dependencies."
+  echo "This usually means the current Linux host cannot reliably reach PyPI/CDN."
+  echo
+  echo "Try rerunning with a mirror:"
+  echo "  sudo UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh"
+  echo
+  echo "If your network requires the system certificate store, also try:"
+  echo "  sudo UV_NATIVE_TLS=true UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh"
+  echo
+  echo "You can also set script-specific aliases:"
+  echo "  sudo YIMIN_UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh"
+  echo "  sudo YIMIN_UV_NATIVE_TLS=true ./scripts/install_linux.sh"
+}
+
 resolve_uv_bin() {
   if command -v uv >/dev/null 2>&1; then
     command -v uv
@@ -55,15 +95,22 @@ repair_uv_cache_permissions() {
 
 run_sync() {
   local uv_bin="$1"
+  build_uv_sync_env
   if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
     local user_home
     user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
     repair_uv_cache_permissions
-    sudo -u "$SUDO_USER" env HOME="$user_home" PATH="$PATH:$user_home/.local/bin" "$uv_bin" sync
+    if ! sudo -u "$SUDO_USER" env HOME="$user_home" PATH="$PATH:$user_home/.local/bin" "${UV_SYNC_ENV[@]}" "$uv_bin" sync; then
+      print_uv_sync_failure_help
+      return 1
+    fi
     return 0
   fi
 
-  "$uv_bin" sync
+  if ! env "${UV_SYNC_ENV[@]}" "$uv_bin" sync; then
+    print_uv_sync_failure_help
+    return 1
+  fi
 }
 
 UV_BIN="$(resolve_uv_bin || true)"

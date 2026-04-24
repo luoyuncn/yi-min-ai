@@ -33,6 +33,7 @@ def _build_runtime_config() -> MflowRuntimeConfig:
             api_key_env="DASHSCOPE_API_KEY",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             dimensions=1024,
+            batch_size=10,
         ),
     )
 
@@ -112,6 +113,8 @@ def test_mflow_bridge_initializes_with_runtime_configuration(monkeypatch, tmp_pa
     assert ("set_graph_database_provider", "kuzu") in fake_mflow.config.calls
     assert bridge._env_overrides["MFLOW_EMBEDDING_MODEL"] == "text-embedding-v4"
     assert bridge._env_overrides["MFLOW_EMBEDDING_API_KEY"] == "dashscope-key"
+    assert bridge._env_overrides["MFLOW_EMBEDDING_DIMENSIONS"] == "1024"
+    assert bridge._env_overrides["MFLOW_EMBEDDING_BATCH_SIZE"] == "10"
 
 
 def test_patch_litellm_openai_compatible_embedding_defaults_sets_float_for_custom_endpoint() -> None:

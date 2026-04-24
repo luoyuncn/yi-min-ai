@@ -46,6 +46,25 @@ system 级安装：
 sudo ./scripts/install_linux.sh
 ```
 
+如果服务器访问 PyPI / `files.pythonhosted.org` 不稳定，可以直接切镜像：
+
+```bash
+sudo UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh
+```
+
+如果网络环境依赖系统证书链，再加：
+
+```bash
+sudo UV_NATIVE_TLS=true UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh
+```
+
+脚本也支持同义的自定义环境变量，方便和已有 `UV_*` 配置隔离：
+
+```bash
+sudo YIMIN_UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh
+sudo YIMIN_UV_NATIVE_TLS=true ./scripts/install_linux.sh
+```
+
 这个脚本会做几件事：
 
 1. `uv sync`
@@ -186,4 +205,5 @@ loginctl enable-linger "$USER"
 - 当前仓库默认的 `config/agent.yaml` 更适合本地开发
 - 生产建议用 `config/agent.linux.yaml`
 - `sudo ./scripts/install_linux.sh` 会自动尝试把 `uv sync` 退回到原调用用户执行，避免把仓库和 `.venv` 改成 root 所有
+- `sudo ./scripts/install_linux.sh` 现在会显式透传常用的 `UV_*` 下载参数，便于镜像、证书和索引策略在 `sudo -u` 场景下继续生效
 - 当前多 runtime 模式下，Heartbeat / Cron 仍会自动禁用，这是现阶段实现限制

@@ -22,10 +22,16 @@ mflow:
     # Reuse an existing provider's api_key/base_url, then override the model.
     provider_name: "qwen"
     model: "text-embedding-v4"
+    # DashScope text-embedding-v4 defaults to 1024 dims and allows at most 10
+    # inputs per batch. If you change dimensions later, rebuild the corresponding
+    # workspace's `mflow_data/` to avoid vector-schema mismatches.
+    dimensions: 1024
+    batch_size: 10
     # Optional explicit overrides:
     # api_key_env: "DASHSCOPE_API_KEY"
     # base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # dimensions: 1024
+    # batch_size: 10
 
 channels:
   instances:

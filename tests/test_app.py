@@ -521,6 +521,8 @@ def test_build_mflow_embedding_config_qualifies_dashscope_model_for_litellm(tmp_
             embedding=MflowEmbeddingSettings(
                 provider_name="qwen",
                 model="text-embedding-v4",
+                dimensions=1024,
+                batch_size=10,
             ),
         ),
     )
@@ -535,6 +537,8 @@ def test_build_mflow_embedding_config_qualifies_dashscope_model_for_litellm(tmp_
 
     assert embedding_config.provider == "openai"
     assert embedding_config.model == "openai/text-embedding-v4"
+    assert embedding_config.dimensions == 1024
+    assert embedding_config.batch_size == 10
     assert resolved_model == "text-embedding-v4"
     assert resolved_provider == "openai"
     assert resolved_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"

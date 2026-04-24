@@ -14,6 +14,11 @@ mflow:
   embedding:
     provider_name: "qwen"
     model: "text-embedding-v4"
+    # DashScope text-embedding-v4 defaults to 1024 dims and allows at most 10
+    # inputs per batch. If you change dimensions later, rebuild this workspace's
+    # `mflow_data/` under YIMIN_DATA_ROOT to keep vector schema consistent.
+    dimensions: 1024
+    batch_size: 10
 
 channels:
   instances:

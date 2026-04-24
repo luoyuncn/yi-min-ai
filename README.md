@@ -84,6 +84,24 @@ uv run pytest -v
 - `config/providers.yaml`
   管理 provider 列表、模型名、`api_key_env`、`base_url` 等。
 
+### M-flow 与 DashScope 说明
+
+如果你给 M-flow 的 embedding 走阿里云 DashScope 的 OpenAI-compatible 接口，建议显式保持下面两个值：
+
+```yaml
+mflow:
+  embedding:
+    model: "text-embedding-v4"
+    dimensions: 1024
+    batch_size: 10
+```
+
+原因：
+
+- `text-embedding-v4` 默认返回 `1024` 维向量
+- DashScope 单次 embedding 批量上限是 `10`
+- 如果你改过 embedding 维度或升级过 M-flow，旧的 `mflow_data/` 可能会和当前 schema 冲突，这时需要备份后重建对应 workspace 的 `mflow_data/`
+
 ## 工作区与数据策略
 
 应用启动时会自动脚手架这些文件：
@@ -119,6 +137,18 @@ export YIMIN_DATA_ROOT=/data/yi-min-ai
 
 ```bash
 ./scripts/install_linux.sh
+```
+
+如果 Linux 服务器访问 PyPI / `files.pythonhosted.org` 很慢，可以直接带镜像重试：
+
+```bash
+sudo UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh
+```
+
+如果还涉及系统证书链问题，再加：
+
+```bash
+sudo UV_NATIVE_TLS=true UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install_linux.sh
 ```
 
 安装完成后可直接用：
