@@ -18,6 +18,8 @@ class ProviderConfig:
     model: str
     api_key_env: str
     base_url: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
     extra_body: dict[str, Any] | None = None
     max_output_tokens: int = 2048
 
@@ -29,6 +31,8 @@ class LLMRequest:
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] = field(default_factory=list)
     max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
 
 
 @dataclass(slots=True)

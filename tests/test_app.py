@@ -175,3 +175,49 @@ def test_build_provider_manager_passes_extra_body_to_primary_provider(monkeypatc
     _build_provider_manager(settings)
 
     assert captured["extra_body"] == {"enable_thinking": False}
+
+
+def test_build_provider_manager_applies_llm_factory_defaults_for_primary_provider(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """primary provider 未显式配置 extra_body 时，也应走工厂的模型默认值。"""
+
+    captured: dict[str, object] = {}
+
+    class CapturingOpenAIProvider:
+        def __init__(self, config: ProviderConfig) -> None:
+            captured["extra_body"] = config.extra_body
+            self.config = config
+
+        async def initialize(self) -> None:
+            return None
+
+        async def call(self, request: LLMRequest) -> LLMResponse:
+            return LLMResponse(type="text", text="pong", provider=self.config.name, model=self.config.model)
+
+    monkeypatch.setattr(provider_manager_module, "OpenAICompatProvider", CapturingOpenAIProvider)
+
+    settings = Settings(
+        agent=AgentSettings(
+            name="Atlas",
+            workspace_dir=tmp_path / "workspace",
+            max_iterations=8,
+        ),
+        providers=ProviderSettings(
+            config_file=tmp_path / "providers.yaml",
+            default_primary="qwen",
+            items=[
+                ProviderConfigItem(
+                    name="qwen",
+                    provider_type="openai",
+                    model="qwen3.6-plus",
+                    api_key_env="OPENAI_API_KEY",
+                ),
+            ],
+        ),
+    )
+
+    _build_provider_manager(settings)
+
+    assert captured["extra_body"] == {"enable_thinking": True}

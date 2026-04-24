@@ -32,6 +32,9 @@ class ProviderConfigItem:
     model: str
     api_key_env: str
     base_url: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    max_output_tokens: int | None = None
     extra_body: dict[str, Any] | None = None
 
 

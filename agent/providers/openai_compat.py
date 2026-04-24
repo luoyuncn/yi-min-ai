@@ -117,6 +117,14 @@ class OpenAICompatProvider(LLMProvider):
             "messages": self._convert_messages(request.messages),
             "max_tokens": request.max_tokens or self.config.max_output_tokens,
         }
+        temperature = request.temperature if request.temperature is not None else self.config.temperature
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        top_p = request.top_p if request.top_p is not None else self.config.top_p
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+
         if self.config.extra_body:
             kwargs["extra_body"] = dict(self.config.extra_body)
         if request.tools:
@@ -133,7 +141,8 @@ class OpenAICompatProvider(LLMProvider):
             "event=provider_request_config "
             f"provider={self.config.name} model={self.config.model} stream={stream} "
             f"message_count={len(kwargs.get('messages', []))} tool_count={len(kwargs.get('tools', []))} "
-            f"max_tokens={kwargs.get('max_tokens')} enable_thinking={enable_thinking} "
+            f"max_tokens={kwargs.get('max_tokens')} temperature={kwargs.get('temperature')} "
+            f"top_p={kwargs.get('top_p')} enable_thinking={enable_thinking} "
             f"base_url={self.config.base_url or 'default'}"
         )
 

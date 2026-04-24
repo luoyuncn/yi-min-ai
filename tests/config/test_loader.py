@@ -187,3 +187,41 @@ def test_load_settings_parses_provider_extra_body(tmp_path: Path) -> None:
     settings = load_settings(config_dir / "agent.yaml")
 
     assert settings.providers.items[0].extra_body == {"enable_thinking": False}
+
+
+def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> None:
+    """Provider 可选的公共生成参数应能从 YAML 正确解析出来。"""
+
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Atlas\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n"
+        "    temperature: 0.4\n"
+        "    top_p: 0.9\n"
+        "    max_output_tokens: 4096\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+    provider = settings.providers.items[0]
+
+    assert provider.temperature == 0.4
+    assert provider.top_p == 0.9
+    assert provider.max_output_tokens == 4096

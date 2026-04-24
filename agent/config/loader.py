@@ -124,6 +124,28 @@ def _require_int(data: dict, key: str, section: str) -> int:
     return value
 
 
+def _optional_int(data: dict, key: str) -> int | None:
+    """读取可选整数，不存在时返回 None。"""
+
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{key} must be an integer if provided")
+    return value
+
+
+def _optional_float(data: dict, key: str) -> float | None:
+    """读取可选浮点数，允许 YAML 中使用整数写法。"""
+
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a number if provided")
+    return float(value)
+
+
 def _optional_str(data: dict, key: str) -> str | None:
     """读取可选字符串字段，不存在或为空时返回 None。"""
 
@@ -147,5 +169,8 @@ def _build_provider_item(item: object, index: int) -> ProviderConfigItem:
         model=_require_str(item, "model", f"providers.providers[{index}]"),
         api_key_env=_require_str(item, "api_key_env", f"providers.providers[{index}]"),
         base_url=_optional_str(item, "base_url"),
+        temperature=_optional_float(item, "temperature"),
+        top_p=_optional_float(item, "top_p"),
+        max_output_tokens=_optional_int(item, "max_output_tokens"),
         extra_body=_optional_mapping(item, "extra_body"),
     )

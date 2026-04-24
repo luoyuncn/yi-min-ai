@@ -224,3 +224,54 @@ async def test_call_stream_logs_provider_request_config_for_thinking_mode(monkey
 
     assert "event=provider_request_config" in caplog.text
     assert "enable_thinking=False" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_call_stream_passes_common_generation_parameters_to_openai_endpoint(monkeypatch) -> None:
+    """兼容 Provider 应透传公共生成参数，并允许请求级覆盖。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="gpt-5",
+            provider_type="openai",
+            model="gpt-5.4",
+            api_key_env="OPENAI_API_KEY",
+            temperature=0.2,
+            top_p=0.8,
+            max_output_tokens=3000,
+        )
+    )
+    await provider.initialize()
+
+    async for _ in provider.call_stream(
+        LLMRequest(
+            messages=[{"role": "user", "content": "你好"}],
+            temperature=0.6,
+        )
+    ):
+        pass
+
+    assert captured["temperature"] == 0.6
+    assert captured["top_p"] == 0.8
+    assert captured["max_tokens"] == 3000

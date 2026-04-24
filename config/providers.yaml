@@ -11,6 +11,10 @@ providers:
     type: "openai"
     model: "gpt-5.4"
     api_key_env: "OPENAI_API_KEY"
+    # 以下公共参数均为可选项，可由工厂统一透传。
+    # temperature: 0.2
+    # top_p: 0.9
+    # max_output_tokens: 4096
     # 自定义 OpenAI 兼容网关通常需要带 `/v1`
     # provider 代码会对 bare host 自动补 `/v1`，这里仍显式写出以减少歧义
     base_url: "http://142.171.209.142:8888/v1"

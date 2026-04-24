@@ -53,6 +53,14 @@ class AnthropicProvider(LLMProvider):
             "messages": messages,
             "max_tokens": request.max_tokens or self.config.max_output_tokens,
         }
+        temperature = request.temperature if request.temperature is not None else self.config.temperature
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        top_p = request.top_p if request.top_p is not None else self.config.top_p
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+
         if system_prompt:
             kwargs["system"] = system_prompt
         if request.tools:

@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 from agent.config import load_settings
 from agent.core.loop import AgentCore
-from agent.core.provider import LLMResponse, ProviderConfig
+from agent.core.llm_factory import LLMFactory
+from agent.core.provider import LLMResponse
 from agent.core.provider_manager import ProviderManager
 from agent.gateway.normalizer import NormalizedMessage
 from agent.memory import AlwaysOnMemory, SessionArchive
@@ -183,30 +184,21 @@ def build_app(config_path: Path, testing: bool = False) -> AgentApplication:
             raise
 
 
-def _build_provider_manager(settings) -> ProviderManager:
+def _build_provider_manager(settings, **llm_overrides) -> ProviderManager:
     """根据配置注册真实 Provider（同步包装）。"""
 
-    return asyncio.run(_build_provider_manager_async(settings))
+    return asyncio.run(_build_provider_manager_async(settings, **llm_overrides))
 
 
-async def _build_provider_manager_async(settings) -> ProviderManager:
+async def _build_provider_manager_async(settings, **llm_overrides) -> ProviderManager:
     """根据配置注册真实 Provider。"""
 
     manager = ProviderManager()
-    primary = settings.providers.default_primary
-    primary_item = next(item for item in settings.providers.items if item.name == primary)
 
     # 当前运行时只会调用 primary provider。
     # 在真正实现多 provider fallback 之前，不应因为未启用的 provider 缺少密钥而阻塞启动。
     await manager.register(
-        ProviderConfig(
-            name=primary_item.name,
-            provider_type=primary_item.provider_type,
-            model=primary_item.model,
-            api_key_env=primary_item.api_key_env,
-            base_url=primary_item.base_url,
-            extra_body=primary_item.extra_body,
-        ),
+        LLMFactory.create_primary(settings, **llm_overrides),
         make_primary=True,
     )
     return manager
