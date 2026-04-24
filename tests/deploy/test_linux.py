@@ -85,3 +85,10 @@ def test_install_linux_script_has_valid_bash_syntax() -> None:
     )
 
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_install_linux_script_repairs_uv_cache_permissions_for_sudo_user() -> None:
+    script_text = Path("scripts/install_linux.sh").read_text(encoding="utf-8")
+
+    assert 'mkdir -p "$user_home/.cache/uv"' in script_text
+    assert 'chown -R "$SUDO_USER:$user_group" "$user_home/.cache/uv"' in script_text

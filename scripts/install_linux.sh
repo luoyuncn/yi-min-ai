@@ -39,11 +39,26 @@ resolve_uv_bin() {
   return 1
 }
 
+repair_uv_cache_permissions() {
+  if [[ "${EUID}" -ne 0 || -z "${SUDO_USER:-}" ]]; then
+    return 0
+  fi
+
+  local user_home user_group
+  user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  user_group="$(id -gn "$SUDO_USER")"
+
+  mkdir -p "$user_home/.cache/uv"
+  chown "$SUDO_USER:$user_group" "$user_home/.cache" "$user_home/.cache/uv"
+  chown -R "$SUDO_USER:$user_group" "$user_home/.cache/uv"
+}
+
 run_sync() {
   local uv_bin="$1"
   if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
     local user_home
     user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    repair_uv_cache_permissions
     sudo -u "$SUDO_USER" env HOME="$user_home" PATH="$PATH:$user_home/.local/bin" "$uv_bin" sync
     return 0
   fi
