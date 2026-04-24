@@ -62,20 +62,16 @@ class FeishuAdapter:
 
         logger.info("Connecting to Feishu via WebSocket...")
 
-        # 构建事件处理器
-        event_handler = (
+        # 构建事件处理器（不产生 Future，可在主 loop 上构建）
+        self._event_handler = (
             self._lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_message_receive)
             .build()
         )
 
-        # 建立 WebSocket 长连接（SDK 内置鉴权 + 重连）
-        self._ws_client = self._lark.ws.Client(
-            self.app_id,
-            self.app_secret,
-            event_handler=event_handler,
-            log_level=self._lark.LogLevel.INFO,
-        )
+        # 注意：ws.Client 必须在 _run_ws_client() 的线程 loop 上创建，
+        # 否则其内部 connection_lost_waiter Future 会绑定到主 loop，
+        # 导致 _receive_message_loop 里 asyncio.shield() 抛 "attached to a different loop"。
 
         # 构建 API Client 用于主动发消息
         self._lark_client = (
@@ -138,6 +134,16 @@ class FeishuAdapter:
             if ws_module is not None:
                 ws_module.loop = ws_loop
             logger.info("Feishu WebSocket thread loop created")
+
+            # 在线程 loop 上创建 ws.Client，确保其内部 Future（connection_lost_waiter）
+            # 绑定到 ws_loop，而不是主 loop，避免 asyncio.shield() 跨 loop 的 RuntimeError。
+            self._ws_client = self._lark.ws.Client(
+                self.app_id,
+                self.app_secret,
+                event_handler=self._event_handler,
+                log_level=self._lark.LogLevel.INFO,
+            )
+
             ws_loop.run_until_complete(self._ws_client._connect())
             self._ws_connected.set()
             logger.info("Feishu WebSocket handshake completed")
