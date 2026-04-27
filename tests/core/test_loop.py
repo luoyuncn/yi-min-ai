@@ -226,6 +226,61 @@ def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
     assert "ou-user-1" in second_system_content
 
 
+def test_agent_core_limits_long_history_in_model_context(tmp_path: Path) -> None:
+    """长会话不应把所有历史消息塞进每次模型请求。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider)
+
+    async def seed_session():
+        session = await core.session_manager.get_or_create("feishu:feishu:chat-long", channel="feishu")
+        for index in range(30):
+            session.append(
+                {
+                    "id": f"user-{index}",
+                    "role": "user",
+                    "content": f"old user message {index}",
+                }
+            )
+            session.append(
+                {
+                    "id": f"assistant-{index}",
+                    "role": "assistant",
+                    "content": f"old assistant message {index}",
+                }
+            )
+
+    import asyncio
+
+    asyncio.run(seed_session())
+
+    message = NormalizedMessage(
+        message_id="latest",
+        session_id="chat-long",
+        sender="ou-user-1",
+        body="今日有何新鲜事",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    sent_messages = provider.requests[-1].messages
+    sent_text = "\n".join(message.get("content", "") for message in sent_messages)
+    sent_user_messages = [message for message in sent_messages if message.get("role") == "user"]
+    assert "old user message 0" not in sent_text
+    assert "old assistant message 0" not in sent_text
+    assert "old user message 29" in sent_text
+    assert len(sent_user_messages) == 13
+
+
 def test_agent_core_writes_react_log_for_model_decision_and_tool_result(tmp_path: Path) -> None:
     """ReAct 轨迹应单独写入 logs/react.log，包含模型决策和工具结果。"""
 

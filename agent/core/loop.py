@@ -66,6 +66,7 @@ class AgentCore:
         enable_shell: bool = False,
         shell_requires_confirmation: bool = True,
         max_iterations: int = 8,
+        context_history_turns: int = 12,
         system_prompt: str = "You are Yi Min.",
     ) -> None:
         # 这些依赖都在 build_app 或测试工厂中注入；
@@ -81,6 +82,7 @@ class AgentCore:
         self.runtime_services = runtime_services or RuntimeServices()
         self.shell_requires_confirmation = shell_requires_confirmation
         self.max_iterations = max_iterations
+        self.context_history_turns = context_history_turns
         self.note_store = note_store
         self.memory_store = memory_store
         self.memory_extractor = memory_extractor
@@ -170,13 +172,14 @@ class AgentCore:
                     yield event
                 return
 
+            selected_history = self._select_history_for_context(session.history)
             context = self.context_assembler.assemble(
                 soul_text=self.always_on_memory.load_soul(),
                 memory_text=self.always_on_memory.load_memory(),
                 memory_items_text=self._build_memory_items_text(message.body),
                 tool_index=self.tool_registry.get_index(),
                 skill_index=self.skill_loader.get_index(),
-                history=session.history,
+                history=selected_history,
                 user_message=message.body,
                 channel=message.channel,
                 channel_instance=message.channel_instance,
@@ -186,6 +189,7 @@ class AgentCore:
             logger.info(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
                 f"event=context_assembled context_messages={len(context)} "
+                f"history_messages_used={len(selected_history)} "
                 f"context_tokens={self.context_assembler.count_context_tokens(context)} "
                 f"tool_count={len(self.tool_registry.get_schemas())}"
             )
@@ -909,6 +913,25 @@ class AgentCore:
         if tool_name in {"file_write", "memory_write"}:
             return True
         return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
+
+    def _select_history_for_context(self, history: list[dict]) -> list[dict]:
+        """Keep the model context bounded while preserving recent complete turns."""
+
+        if self.context_history_turns <= 0 or not history:
+            return []
+
+        user_turns_seen = 0
+        start_index = 0
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].get("role") == "user":
+                user_turns_seen += 1
+                if user_turns_seen >= self.context_history_turns:
+                    start_index = index
+                    break
+        selected = list(history[start_index:])
+        while selected and selected[0].get("role") == "tool":
+            selected.pop(0)
+        return selected
 
     def _build_memory_items_text(self, user_message: str) -> str:
         if self.memory_store is None:

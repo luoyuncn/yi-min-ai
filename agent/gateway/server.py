@@ -212,6 +212,43 @@ class GatewayServer:
         streaming_logged = False
         tool_trace_by_id: dict[str, dict] = {}
         tool_call_args_buffer: dict[str, str] = {}
+        patch_tasks: set[asyncio.Task] = set()
+        patch_lock = asyncio.Lock()
+
+        async def send_patch_card(card: dict, assistant_text: str, status: str | None) -> None:
+            try:
+                async with patch_lock:
+                    await adapter.update_card(placeholder_id, card)
+                    self._record_outbound_message(
+                        runtime_app=runtime_app,
+                        channel=message.channel,
+                        channel_instance=message.channel_instance,
+                        session_id=message.session_id,
+                        thread_key=message.thread_key,
+                        channel_message_id=placeholder_id,
+                        reply_to_channel_message_id=source_message_id,
+                        caused_by_message_id=message.message_id,
+                        run_id=message.message_id,
+                        content=assistant_text,
+                        status=status or "updated",
+                        payload={"message_type": "interactive", "source": "feishu_patch", "card": card},
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
+                    f"event=feishu_patch_failed error={exc}",
+                    exc_info=True,
+                )
+
+        def schedule_patch_card(card: dict, assistant_text: str, status: str | None) -> None:
+            task = asyncio.create_task(send_patch_card(card, assistant_text, status))
+            patch_tasks.add(task)
+            task.add_done_callback(patch_tasks.discard)
+
+        async def drain_patch_tasks() -> None:
+            if not patch_tasks:
+                return
+            await asyncio.gather(*list(patch_tasks), return_exceptions=True)
 
         async def patch_placeholder(
             assistant_text: str,
@@ -247,21 +284,7 @@ class GatewayServer:
             last_patch_status = status
             last_patch_card = card
 
-            await adapter.update_card(placeholder_id, card)
-            self._record_outbound_message(
-                runtime_app=runtime_app,
-                channel=message.channel,
-                channel_instance=message.channel_instance,
-                session_id=message.session_id,
-                thread_key=message.thread_key,
-                channel_message_id=placeholder_id,
-                reply_to_channel_message_id=source_message_id,
-                caused_by_message_id=message.message_id,
-                run_id=message.message_id,
-                content=assistant_text,
-                status=status or "updated",
-                payload={"message_type": "interactive", "source": "feishu_patch", "card": card},
-            )
+            schedule_patch_card(card, assistant_text, status)
 
         try:
             logger.info(
@@ -355,6 +378,7 @@ class GatewayServer:
                     final_text = event.result_text or final_text
 
             if placeholder_id is not None:
+                await drain_patch_tasks()
                 final_card = renderer.render_final_card(
                     user_text=message.body,
                     assistant_text=final_text,

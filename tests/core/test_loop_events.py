@@ -220,6 +220,31 @@ def test_cron_list_tool_result_returns_direct_response_without_second_model_call
     assert events[-1].result_text.startswith("你现在有 1 个定时任务")
 
 
+def test_memory_items_do_not_include_saved_notes_by_default(tmp_path: Path) -> None:
+    from agent.memory import NoteStore
+
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    note_store = NoteStore(workspace / "agent.db")
+    note_store.add_note(
+        note_type="assistant_profile",
+        title="助手称呼",
+        content="用户希望助手被称呼为曾国藩。",
+        importance="high",
+        is_user_explicit=True,
+        source_message_id="msg-1",
+        source_thread_id="thread-1",
+    )
+    core = AgentCore.build_for_test(workspace, FakeProviderManager())
+    core.note_store = note_store
+
+    memory_items = core._build_memory_items_text("你是谁")
+
+    assert memory_items == ""
+
+
 def test_failed_reminder_create_returns_direct_error_without_retry(tmp_path: Path) -> None:
     from datetime import datetime
 

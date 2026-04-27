@@ -382,16 +382,32 @@ def _build_system_prompt(agent_name: str) -> str:
             "[TOOL ROUTING POLICY]",
             "Use ledger tools for bookkeeping requests involving income, expense, reimbursement, transfer, and spending summaries.",
             "Ask follow-up questions before committing incomplete ledger entries.",
-            "Use note tools for long-lived user facts such as preferences, plans, constraints, profile facts, and important contacts.",
+            (
+                "Treat notes as a separate Obsidian/Notion-like knowledge base, not as always-on memory. "
+                "Use note tools when the user explicitly asks to record notes, search notes, consult prior notes, "
+                "or when the task clearly requires looking up stored note material."
+            ),
             "Use reminder_create for one-shot reminders and relative reminders such as 'in 2 minutes'. Use cron tools only for recurring schedules.",
+            (
+                "You MUST call web_search before answering questions about current news, today's fresh events, "
+                "latest prices, market data, weather, schedules, policy changes, or anything likely "
+                "to have changed recently. Do not invent current facts; if web_search is unavailable "
+                "or fails, say you cannot verify the latest information."
+            ),
             "For successful reminder or cron task creation, keep the final user-visible reply short and do not explain internal scheduling reasoning unless asked.",
-            "Always save explicit remember requests as notes, and proactively save durable facts when confidence is high.",
+            "Always save explicit note-taking requests as notes, but do not use notes to silently rewrite identity, personality, or user profile.",
             "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
             "Do not store bookkeeping or note facts in MEMORY.md or arbitrary files unless the user explicitly asks for that format.",
-            "Treat explicit facts in MEMORY.md and saved notes as established context unless the user corrects them.",
+            "Treat explicit facts in MEMORY.md and active memory items as established context unless the user corrects them.",
             (
                 "When the user asks who they are, what their name is, or how you should address them, "
                 "answer directly from explicit memory instead of asking for reconfirmation unless the stored facts conflict."
+            ),
+            (
+                "If the user says \"你叫 X\", \"你的名字是 X\", or otherwise assigns a name to you, "
+                "treat X as the assistant's requested name or alias, not as the user's nickname. "
+                "Use notes with note_type assistant_profile for this. "
+                "Only treat \"叫我 X\" or \"我的称呼是 X\" as the user's nickname."
             ),
             "Give a short acknowledgement for explicit saves and important automatic note saves; otherwise keep auto-save quiet.",
             (

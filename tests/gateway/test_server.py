@@ -84,6 +84,37 @@ class FakeStreamingCore:
         )
 
 
+class BurstStreamingCore:
+    def __init__(self) -> None:
+        self.after_first_patch_started = asyncio.Event()
+        self.second_delta_emitted = False
+
+    async def run_events(self, message):
+        yield RunStartedEvent(thread_id=message.session_id, run_id=message.message_id)
+        yield AssistantTextStartEvent(message_id="assistant-burst")
+        yield AssistantTextDeltaEvent(message_id="assistant-burst", delta="第一段")
+        await self.after_first_patch_started.wait()
+        self.second_delta_emitted = True
+        yield AssistantTextDeltaEvent(message_id="assistant-burst", delta="第二段")
+        yield RunFinishedEvent(
+            thread_id=message.session_id,
+            run_id=message.message_id,
+            result_text="第一段第二段",
+        )
+
+
+class BlockingPatchFeishuAdapter(FakeFeishuAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.patch_started = asyncio.Event()
+        self.release_patch = asyncio.Event()
+
+    async def update_card(self, message_id: str, card: dict) -> None:
+        self.patch_started.set()
+        await self.release_patch.wait()
+        await super().update_card(message_id, card)
+
+
 def test_gateway_server_feishu_updates_card_during_streaming_output() -> None:
     """飞书通道应在生成过程中更新占位卡片，而不是只在结束时更新。"""
 
@@ -110,6 +141,40 @@ def test_gateway_server_feishu_updates_card_during_streaming_output() -> None:
     assert adapter.calls[1][2]["header"]["title"]["content"] == "Yi Min 正在输出"
     assert adapter.calls[2][2]["header"]["title"]["content"] == "Yi Min 正在输出"
     assert adapter.calls[3][2]["header"]["title"]["content"] == "Yi Min 回复"
+
+
+def test_gateway_server_feishu_streaming_does_not_await_intermediate_patch() -> None:
+    """中间流式 patch 不应阻塞继续消费模型事件。"""
+
+    core = BurstStreamingCore()
+    gateway = GatewayServer(SimpleNamespace(core=core))
+    gateway._feishu_patch_interval_secs = 0.0
+    adapter = BlockingPatchFeishuAdapter()
+    gateway.adapters["feishu"] = adapter
+
+    message = NormalizedMessage(
+        message_id="run-fire-and-forget",
+        session_id="chat-fire-and-forget",
+        sender="user-fire-and-forget",
+        body="讲讲能力",
+        attachments=[],
+        channel="feishu",
+        metadata={"source_message_id": "src-fire-and-forget"},
+    )
+
+    async def run_case():
+        task = asyncio.create_task(gateway._handle_message(message))
+        await asyncio.wait_for(adapter.patch_started.wait(), timeout=1)
+        core.after_first_patch_started.set()
+        await asyncio.sleep(0)
+        assert core.second_delta_emitted is True
+        assert not task.done()
+        adapter.release_patch.set()
+        return await asyncio.wait_for(task, timeout=1)
+
+    result = asyncio.run(run_case())
+
+    assert result == "第一段第二段"
 
 
 def test_gateway_server_logs_feishu_processing_timeline(caplog) -> None:
