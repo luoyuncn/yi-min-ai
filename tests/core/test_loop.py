@@ -343,6 +343,58 @@ def test_agent_core_removes_historical_tool_payloads_from_model_context(tmp_path
     assert not any(message.get("role") == "tool" for message in sent_messages[1:-1])
 
 
+def test_agent_core_removes_historical_identity_persona_turns_from_model_context(tmp_path: Path) -> None:
+    """普通问题也不应携带会覆盖当前 SOUL 的旧身份/人格对话。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\n你是银月。\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider)
+
+    async def seed_session():
+        session = await core.session_manager.get_or_create("feishu:feishu:chat-persona-history", channel="feishu")
+        for index in range(10):
+            session.append({"id": f"user-{index}", "role": "user", "content": f"普通事实 {index}"})
+            session.append({"id": f"assistant-{index}", "role": "assistant", "content": f"普通回复 {index}"})
+        session.append({"id": "old-user-name", "role": "user", "content": "你叫曾国藩"})
+        session.append({"id": "old-assistant-name", "role": "assistant", "content": "好的，曾国藩。"})
+        session.append({"id": "old-user-soul", "role": "user", "content": "你叫曾国藩，根据他的原型完善你的SOUL"})
+        session.append({"id": "old-assistant-soul", "role": "assistant", "content": "大人，鄙人曾国藩，字伯涵，号涤生。"})
+        session.append({"id": "normal-user-after-stale-persona", "role": "user", "content": "你有哪些工具"})
+        session.append({"id": "stale-persona-normal-answer", "role": "assistant", "content": "国藩手中有几件工具。"})
+        session.append({"id": "old-user-identity", "role": "user", "content": "你是谁"})
+        session.append({"id": "old-assistant-identity", "role": "assistant", "content": "鄙人曾国藩。"})
+
+    import asyncio
+
+    asyncio.run(seed_session())
+
+    message = NormalizedMessage(
+        message_id="latest",
+        session_id="chat-persona-history",
+        sender="ou-user-1",
+        body="你有哪些工具",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    sent_messages = provider.requests[-1].messages
+    sent_text = "\n".join(message.get("content", "") for message in sent_messages)
+    assert "普通事实 9" in sent_text
+    assert "你是银月" in sent_text
+    assert "你叫曾国藩" not in sent_text
+    assert "国藩手中" not in sent_text
+    assert "鄙人曾国藩" not in sent_text
+    assert "完善你的SOUL" not in sent_text
+
+
 def test_agent_core_writes_react_log_for_model_decision_and_tool_result(tmp_path: Path) -> None:
     """ReAct 轨迹应单独写入 logs/react.log，包含模型决策和工具结果。"""
 

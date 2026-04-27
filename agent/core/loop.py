@@ -11,6 +11,7 @@
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -937,10 +938,22 @@ class AgentCore:
 
     def _sanitize_history_for_context(self, history: list[dict]) -> list[dict]:
         sanitized: list[dict] = []
+        stale_assistant_names = self._extract_stale_assistant_names(history)
+        skip_assistant_until_next_user = False
         for message in history:
             role = message.get("role")
             if role == "tool":
                 continue
+            content = message.get("content") or ""
+            if role == "user" and self._is_assistant_identity_or_persona_history_message(content):
+                skip_assistant_until_next_user = True
+                continue
+            if role == "assistant" and skip_assistant_until_next_user:
+                continue
+            if role == "assistant" and self._contains_stale_assistant_name(content, stale_assistant_names):
+                continue
+            if role == "user":
+                skip_assistant_until_next_user = False
             clean_message = {
                 key: value
                 for key, value in message.items()
@@ -965,6 +978,50 @@ class AgentCore:
             "who are you",
             "what is your name",
         }
+
+    def _is_assistant_identity_or_persona_history_message(self, text: str) -> bool:
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        if self._is_assistant_identity_query(normalized):
+            return True
+        if "soul" in normalized and any(marker in normalized for marker in {"你", "你的", "人设", "人格", "身份"}):
+            return True
+        if any(marker in normalized for marker in {"人设", "人格", "身份设定", "角色设定"}):
+            return True
+        if normalized.startswith(("你叫", "你的名字", "你名字")):
+            return True
+        if normalized.startswith("你是") and not normalized.startswith(("你是不是", "你是否")):
+            return True
+        return False
+
+    def _extract_stale_assistant_names(self, history: list[dict]) -> set[str]:
+        names: set[str] = set()
+        patterns = [
+            r"你叫\s*([^\s，,。.!！?？、]+)",
+            r"你的名字(?:是|叫)?\s*([^\s，,。.!！?？、]+)",
+            r"你名字(?:是|叫)?\s*([^\s，,。.!！?？、]+)",
+        ]
+        for message in history:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content") or ""
+            if not self._is_assistant_identity_or_persona_history_message(content):
+                continue
+            for pattern in patterns:
+                match = re.search(pattern, content, flags=re.IGNORECASE)
+                if match:
+                    name = match.group(1).strip()
+                    if 1 < len(name) <= 20:
+                        names.add(name)
+                        if len(name) >= 3 and all("\u4e00" <= char <= "\u9fff" for char in name):
+                            names.add(name[-2:])
+        return names
+
+    def _contains_stale_assistant_name(self, text: str, stale_names: set[str]) -> bool:
+        if not text or not stale_names:
+            return False
+        return any(name in text for name in stale_names)
 
     def _build_memory_items_text(self, user_message: str) -> str:
         if self.memory_store is None:
