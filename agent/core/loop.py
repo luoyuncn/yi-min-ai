@@ -1058,8 +1058,14 @@ class AgentCore:
         return self.trace_client.start_tool(name, **fields)
 
     def _trace_flush(self) -> None:
-        if self.trace_client is not None:
+        if self.trace_client is None:
+            return
+        if getattr(self.trace_client, "flush_on_run_end", False):
             self.trace_client.flush()
+            return
+        flush_async = getattr(self.trace_client, "flush_async", None)
+        if flush_async is not None:
+            flush_async()
 
     def _requires_approval(self, tool_name: str) -> bool:
         if tool_name in {"file_write", "profile_write"}:

@@ -424,4 +424,8 @@ def _build_langfuse_settings(data: dict | None) -> LangfuseSettings:
         capture_reasoning=capture_reasoning,
         max_field_chars=_optional_int(data, "max_field_chars") or 12000,
         sample_rate=_optional_float_with_default(data, "sample_rate", 1.0),
+        timeout_seconds=_optional_int(data, "timeout_seconds") or 15,
+        flush_interval_seconds=_optional_float_with_default(data, "flush_interval_seconds", 2.0),
+        flush_at=_optional_int(data, "flush_at") or 32,
+        flush_on_run_end=_optional_bool_with_default(data, "flush_on_run_end", False),
     )

@@ -25,6 +25,10 @@ observability:
     capture_reasoning: "metadata"
     max_field_chars: 12000
     sample_rate: 1.0
+    timeout_seconds: 15
+    flush_interval_seconds: 2
+    flush_at: 32
+    flush_on_run_end: false
 
 mflow:
   enabled: false

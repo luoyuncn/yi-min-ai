@@ -292,7 +292,11 @@ def test_load_settings_parses_langfuse_observability_settings(tmp_path: Path) ->
         "    capture_tool_args: true\n"
         "    capture_tool_results: true\n"
         "    capture_reasoning: metadata\n"
-        "    max_field_chars: 12000\n",
+        "    max_field_chars: 12000\n"
+        "    timeout_seconds: 15\n"
+        "    flush_interval_seconds: 2\n"
+        "    flush_at: 32\n"
+        "    flush_on_run_end: false\n",
         encoding="utf-8",
     )
     (config_dir / "providers.yaml").write_text(
@@ -309,6 +313,10 @@ def test_load_settings_parses_langfuse_observability_settings(tmp_path: Path) ->
     assert settings.observability.langfuse.enabled is True
     assert settings.observability.langfuse.base_url == "http://192.169.26.221:3000"
     assert settings.observability.langfuse.capture_reasoning == "metadata"
+    assert settings.observability.langfuse.timeout_seconds == 15
+    assert settings.observability.langfuse.flush_interval_seconds == 2
+    assert settings.observability.langfuse.flush_at == 32
+    assert settings.observability.langfuse.flush_on_run_end is False
 
 
 def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> None:

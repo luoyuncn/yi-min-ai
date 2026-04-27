@@ -126,6 +126,10 @@ class LangfuseSettings:
     capture_reasoning: str = "metadata"
     max_field_chars: int = 12000
     sample_rate: float = 1.0
+    timeout_seconds: int = 15
+    flush_interval_seconds: float = 2.0
+    flush_at: int = 32
+    flush_on_run_end: bool = False
 
 
 @dataclass(slots=True)

@@ -247,7 +247,7 @@ def test_agent_core_records_langfuse_style_trace_for_model_and_tool(tmp_path: Pa
     assert any(event["event"] == "start" and event["kind"] == "generation" and event["name"] == "llm.chat" for event in tracer.events)
     assert any(event["event"] == "start" and event["kind"] == "tool" and event["name"] == "tool.file_read" for event in tracer.events)
     assert any(event["event"] == "update" and event["kind"] == "tool" and "hello" in event.get("output", "") for event in tracer.events)
-    assert any(event["event"] == "flush" for event in tracer.events)
+    assert not any(event["event"] == "flush" for event in tracer.events)
 
 
 def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
