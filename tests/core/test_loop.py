@@ -182,6 +182,128 @@ class CapturingProviderManager:
         return type("Resp", (), {"type": "text", "text": "好的，已记住。", "tool_calls": None})()
 
 
+class LedgerQueryProviderManager:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def call(self, request):
+        self.requests.append(request)
+        if any(message.get("role") == "tool" for message in request.messages):
+            return type("Resp", (), {"type": "text", "text": "Tims 已在今天账本里。", "tool_calls": None})()
+        return type(
+            "Resp",
+            (),
+            {
+                "type": "tool_calls",
+                "text": None,
+                "tool_calls": [
+                    {
+                        "id": "tool-ledger-query",
+                        "name": "ledger_query_entries",
+                        "input": {
+                            "limit": 10,
+                            "occurred_from": "2026-04-27T00:00:00+08:00",
+                            "occurred_to": "2026-04-28T00:00:00+08:00",
+                        },
+                    }
+                ],
+            },
+        )()
+
+
+def test_agent_core_can_query_ledger_entries_for_follow_up_item(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider)
+    from datetime import datetime
+    core.context_assembler.now_provider = lambda: datetime.fromisoformat("2026-04-27T18:00:00+08:00")
+    core.ledger_store.add_entry(
+        direction="expense",
+        amount_cent=1500,
+        currency="CNY",
+        category="beverage",
+        occurred_at="2026-04-27T08:00:00+08:00",
+        merchant="Tims",
+        note=None,
+        source_message_id="old",
+        source_thread_id="chat-ledger",
+    )
+
+    message = NormalizedMessage(
+        message_id="latest",
+        session_id="chat-ledger",
+        sender="ou-user-1",
+        body="我喝的tims呢",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    result = core.run_sync(message)
+
+    assert "已经记了" in result
+    assert "Tims" in result
+    assert "15元" in result
+    assert provider.requests == []
+
+
+def test_agent_core_summarizes_today_ledger_from_store_without_model_guessing(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider)
+    from datetime import datetime
+    core.context_assembler.now_provider = lambda: datetime.fromisoformat("2026-04-27T18:00:00+08:00")
+    core.ledger_store.add_entry(
+        direction="expense",
+        amount_cent=1500,
+        currency="CNY",
+        category="beverage",
+        occurred_at="2026-04-27T08:00:00+08:00",
+        merchant="Tims",
+        note=None,
+        source_message_id="old-1",
+        source_thread_id="chat-ledger",
+    )
+    core.ledger_store.add_entry(
+        direction="expense",
+        amount_cent=2800,
+        currency="CNY",
+        category="meal",
+        occurred_at="2026-04-27T18:52:00+08:00",
+        merchant="豌杂面店",
+        note=None,
+        source_message_id="old-2",
+        source_thread_id="chat-ledger",
+    )
+
+    message = NormalizedMessage(
+        message_id="latest",
+        session_id="chat-ledger",
+        sender="ou-user-1",
+        body="总结下今天的账本吧",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    result = core.run_sync(message)
+
+    assert "43元" in result
+    assert "Tims" in result
+    assert "豌杂面店" in result
+    assert provider.requests == []
+
+
 class RecordingTraceObservation:
     def __init__(self, recorder, kind: str, name: str, **fields) -> None:
         self.recorder = recorder

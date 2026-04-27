@@ -53,6 +53,8 @@ def ledger_query_entries(
     direction: str | None = None,
     category: str | None = None,
     source_thread_id: str | None = None,
+    occurred_from: str | None = None,
+    occurred_to: str | None = None,
     limit: int = 10,
 ) -> str:
     _require_dependency(ledger_store, "LedgerStore")
@@ -60,6 +62,8 @@ def ledger_query_entries(
         direction=direction,
         category=category,
         source_thread_id=source_thread_id,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
         limit=limit,
     )
     if not rows:
@@ -76,9 +80,16 @@ def ledger_summary(
     *,
     category: str | None = None,
     source_thread_id: str | None = None,
+    occurred_from: str | None = None,
+    occurred_to: str | None = None,
 ) -> str:
     _require_dependency(ledger_store, "LedgerStore")
-    summary = ledger_store.summary(category=category, source_thread_id=source_thread_id)
+    summary = ledger_store.summary(
+        category=category,
+        source_thread_id=source_thread_id,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+    )
     return json.dumps(summary, ensure_ascii=False)
 
 

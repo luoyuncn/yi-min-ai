@@ -149,6 +149,8 @@ class LedgerStore:
         direction: str | None = None,
         category: str | None = None,
         source_thread_id: str | None = None,
+        occurred_from: str | None = None,
+        occurred_to: str | None = None,
         limit: int = 10,
     ) -> list[dict]:
         clauses = []
@@ -162,6 +164,12 @@ class LedgerStore:
         if source_thread_id:
             clauses.append("source_thread_id = ?")
             params.append(source_thread_id)
+        if occurred_from:
+            clauses.append("occurred_at >= ?")
+            params.append(occurred_from)
+        if occurred_to:
+            clauses.append("occurred_at < ?")
+            params.append(occurred_to)
 
         sql = (
             "SELECT id, direction, amount_cent, currency, category, occurred_at, merchant, note, "
@@ -183,6 +191,8 @@ class LedgerStore:
         *,
         category: str | None = None,
         source_thread_id: str | None = None,
+        occurred_from: str | None = None,
+        occurred_to: str | None = None,
     ) -> dict:
         clauses = []
         params: list[object] = []
@@ -192,6 +202,12 @@ class LedgerStore:
         if source_thread_id:
             clauses.append("source_thread_id = ?")
             params.append(source_thread_id)
+        if occurred_from:
+            clauses.append("occurred_at >= ?")
+            params.append(occurred_from)
+        if occurred_to:
+            clauses.append("occurred_at < ?")
+            params.append(occurred_to)
 
         sql = (
             "SELECT "

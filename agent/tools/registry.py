@@ -176,6 +176,8 @@ def build_stage1_registry(
                     "direction": _optional_string_field("income or expense"),
                     "category": _optional_string_field("Category filter"),
                     "source_thread_id": _optional_string_field("Optional source thread filter"),
+                    "occurred_from": _optional_string_field("Inclusive ISO datetime lower bound"),
+                    "occurred_to": _optional_string_field("Exclusive ISO datetime upper bound"),
                     "limit": _integer_field("Result limit"),
                 },
                 required=["limit"],
@@ -193,6 +195,8 @@ def build_stage1_registry(
                 {
                     "category": _optional_string_field("Category filter"),
                     "source_thread_id": _optional_string_field("Optional source thread filter"),
+                    "occurred_from": _optional_string_field("Inclusive ISO datetime lower bound"),
+                    "occurred_to": _optional_string_field("Exclusive ISO datetime upper bound"),
                 },
                 required=[],
             ),

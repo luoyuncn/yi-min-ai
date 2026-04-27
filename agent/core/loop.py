@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -173,6 +174,42 @@ class AgentCore:
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
                 f"event=session_loaded history_messages={len(session.history)}"
             )
+            preflight_response = self._try_ledger_preflight_response(message.body)
+            if preflight_response is not None:
+                logger.info(
+                    f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+                    f"event=preflight_response type=ledger result_chars={len(preflight_response)}"
+                )
+                assistant_message_id = str(uuid4())
+                yield AssistantTextStartEvent(message_id=assistant_message_id)
+                yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=preflight_response)
+                yield AssistantTextEndEvent(message_id=assistant_message_id)
+                session.append({"id": message.message_id, "role": "user", "content": message.body})
+                session.append({"id": assistant_message_id, "role": "assistant", "content": preflight_response})
+                self.session_archive.persist_session(session)
+                self._log_run_timing_summary(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    channel=message.channel,
+                    message_metadata=metadata,
+                )
+                metadata["run_finished_at"] = monotonic_now()
+                logger.info(
+                    f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
+                    f"event=run_finished total_ms={elapsed_ms(run_started_at)} result_chars={len(preflight_response)} preflight=True"
+                )
+                event = RunFinishedEvent(thread_id=thread_id, run_id=run_id, result_text=preflight_response)
+                trace_observation.update(
+                    output=preflight_response,
+                    metadata={
+                        "run_id": run_id,
+                        "trace_id": metadata.get("trace_id"),
+                        "total_ms": elapsed_ms(run_started_at),
+                        "preflight": "ledger",
+                    },
+                )
+                yield event
+                return
             command = message.metadata.get("command") or {}
             if command:
                 async for event in self._resume_from_command(
@@ -1135,6 +1172,82 @@ class AgentCore:
             "who are you",
             "what is your name",
         }
+
+    def _try_ledger_preflight_response(self, user_message: str) -> str | None:
+        if self.ledger_store is None:
+            return None
+        text = (user_message or "").strip()
+        if not text:
+            return None
+
+        wants_today_ledger = "账本" in text and any(marker in text for marker in {"今天", "今日", "查", "查询", "总结"})
+        asks_missing_item = text.endswith(("呢", "呢？", "吗", "吗？")) and any(
+            marker in text.lower()
+            for marker in {"tims", "咖啡", "奶茶", "早餐", "午餐", "晚餐", "喝", "吃", "买"}
+        )
+        if not wants_today_ledger and not asks_missing_item:
+            return None
+
+        start, end = self._today_bounds()
+        entries = self.ledger_store.query_entries(occurred_from=start, occurred_to=end, limit=20)
+        summary = self.ledger_store.summary(occurred_from=start, occurred_to=end)
+        if not entries:
+            return "今天账本里还没有正式记录。"
+
+        if asks_missing_item:
+            matched = self._match_ledger_entries_for_message(entries, text)
+            if matched:
+                lines = "\n".join(f"- {self._format_ledger_entry_for_reply(entry)}" for entry in matched[:5])
+                return f"在账本里，已经记了：\n{lines}"
+            return "我查了今天的正式账本，没找到这笔记录。你把金额和大致时间告诉我，我再补上。"
+
+        total_expense = self._format_yuan(summary.get("expense_cent", 0))
+        total_income = self._format_yuan(summary.get("income_cent", 0))
+        lines = "\n".join(f"- {self._format_ledger_entry_for_reply(entry)}" for entry in entries[:8])
+        if summary.get("income_cent", 0):
+            return f"今天账本共 {summary.get('entry_count', len(entries))} 笔，支出 {total_expense}，收入 {total_income}。\n{lines}"
+        return f"今天账本共 {summary.get('entry_count', len(entries))} 笔，总支出 {total_expense}。\n{lines}"
+
+    def _today_bounds(self) -> tuple[str, str]:
+        now = self.context_assembler.now_provider().astimezone()
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return start.isoformat(), end.isoformat()
+
+    def _match_ledger_entries_for_message(self, entries: list[dict], text: str) -> list[dict]:
+        normalized = text.lower()
+        matches = []
+        for entry in entries:
+            haystack = " ".join(
+                str(entry.get(key) or "").lower()
+                for key in ("merchant", "category", "note")
+            )
+            if "tims" in normalized and "tims" in haystack:
+                matches.append(entry)
+                continue
+            for token in re.findall(r"[\w\u4e00-\u9fff]+", normalized):
+                if len(token) >= 2 and token in haystack:
+                    matches.append(entry)
+                    break
+        return matches
+
+    def _format_ledger_entry_for_reply(self, entry: dict) -> str:
+        occurred_at = str(entry.get("occurred_at") or "")
+        time_text = occurred_at[11:16] if len(occurred_at) >= 16 else "时间未知"
+        direction = "收入" if entry.get("direction") == "income" else "支出"
+        merchant = entry.get("merchant") or "未填写商家"
+        category = entry.get("category") or "未分类"
+        amount = self._format_yuan(entry.get("amount_cent", 0))
+        return f"{time_text} {direction} {amount} | {category}：{merchant}"
+
+    def _format_yuan(self, amount_cent) -> str:
+        try:
+            amount = int(amount_cent or 0) / 100
+        except (TypeError, ValueError):
+            amount = 0
+        if amount.is_integer():
+            return f"{int(amount)}元"
+        return f"{amount:.2f}元"
 
     def _is_assistant_identity_or_persona_history_message(self, text: str) -> bool:
         normalized = (text or "").strip().lower()

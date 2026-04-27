@@ -431,6 +431,11 @@ def _build_system_prompt(agent_name: str) -> str:
             ),
             "[TOOL ROUTING POLICY]",
             "Use ledger tools for bookkeeping requests involving income, expense, reimbursement, transfer, and spending summaries.",
+            (
+                "When the user asks whether a ledger item was missed, says 'what about X' after a ledger summary, "
+                "or asks to query today's ledger, you MUST call ledger_query_entries and/or ledger_summary before answering. "
+                "Do not answer from chat history or ask for missing details until committed ledger entries have been checked."
+            ),
             "Ask follow-up questions before committing incomplete ledger entries.",
             (
                 "Treat notes as a separate Obsidian/Notion-like knowledge base, not as always-on memory. "
