@@ -59,6 +59,9 @@ class ContextAssembler:
         *,
         channel: str = "cli",
         channel_instance: str = "default",
+        sender: str | None = None,
+        metadata: dict | None = None,
+        memory_items_text: str = "",
     ) -> list[dict]:
         """把所有上下文片段按固定顺序组装起来。"""
 
@@ -81,15 +84,29 @@ class ContextAssembler:
             channel_block_lines.append("Avoid Markdown tables. Prefer short paragraphs and flat bullet lists.")
             channel_block_lines.append("Keep formatting stable in Feishu cards. Do not rely on table rendering.")
         channel_block = "\n".join(channel_block_lines)
+        human_block_lines = [
+            "[HUMAN CONTEXT]",
+            f"Current sender: {sender or 'unknown'}",
+            f"Chat type: {(metadata or {}).get('chat_type', 'unknown')}",
+        ]
+        human_block = "\n".join(human_block_lines)
+        memory_items_block = "\n".join(
+            [
+                "[MEMORY ITEMS]",
+                memory_items_text.strip() or "No retrieved durable memory items.",
+            ]
+        )
         system_content = "\n\n".join(
             [
                 self.system_prompt,
                 system_time_block,
                 channel_block,
+                human_block,
                 "[SOUL.md]",
                 soul_text,
                 "[MEMORY.md]",
                 memory_text,
+                memory_items_block,
                 "[TOOL INDEX]",
                 tool_index,
                 "[SKILL INDEX]",

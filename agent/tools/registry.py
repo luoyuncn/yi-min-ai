@@ -15,7 +15,7 @@ from agent.tools.builtin.ledger_tools import (
     ledger_summary,
     ledger_upsert_draft,
 )
-from agent.tools.builtin.memory_tools import memory_write, recall_memory
+from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, memory_write, recall_memory
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.session_tools import read_skill, search_sessions
 from agent.tools.builtin.shell_tools import shell_exec
@@ -66,6 +66,7 @@ def build_stage1_registry(
     mflow_bridge=None,
     ledger_store=None,
     note_store=None,
+    memory_store=None,
     enable_shell: bool = False,
     enable_web_search: bool = True,
 ) -> ToolRegistry:
@@ -194,6 +195,42 @@ def build_stage1_registry(
             description="Replace MEMORY.md content for the next turn.",
             schema=_schema("memory_write", "Replace MEMORY.md", {"content": _string_field("Memory content")}),
             handler=partial(memory_write, always_on_memory),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="memory_search",
+            description="Search auditable durable memories.",
+            schema=_schema(
+                "memory_search",
+                "Search durable memories",
+                {"query": _string_field("Search query"), "limit": _integer_field("Result limit")},
+            ),
+            handler=partial(memory_search, memory_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="memory_list_recent",
+            description="List recent auditable durable memories.",
+            schema=_schema(
+                "memory_list_recent",
+                "List recent durable memories",
+                {"limit": _integer_field("Result limit")},
+            ),
+            handler=partial(memory_list_recent, memory_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="memory_forget",
+            description="Mark one durable memory item obsolete.",
+            schema=_schema(
+                "memory_forget",
+                "Forget one durable memory",
+                {"memory_id": _string_field("Memory id")},
+            ),
+            handler=partial(memory_forget, memory_store),
         )
     )
     registry.register(

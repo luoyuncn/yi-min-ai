@@ -12,6 +12,33 @@ def memory_write(always_on_memory, content: str) -> str:
     return "ok"
 
 
+def memory_search(memory_store, query: str, limit: int = 5) -> str:
+    """Search auditable durable memory items."""
+
+    _require_dependency(memory_store, "MemoryStore")
+    rows = memory_store.search(query, limit=limit)
+    if not rows:
+        return "No memories found."
+    return "\n".join(_format_memory_row(row) for row in rows)
+
+
+def memory_list_recent(memory_store, limit: int = 10) -> str:
+    """List recent auditable durable memory items."""
+
+    _require_dependency(memory_store, "MemoryStore")
+    rows = memory_store.list_recent(limit=limit)
+    if not rows:
+        return "No recent memories."
+    return "\n".join(_format_memory_row(row) for row in rows)
+
+
+def memory_forget(memory_store, memory_id: str) -> str:
+    """Mark one durable memory item obsolete."""
+
+    _require_dependency(memory_store, "MemoryStore")
+    return "ok" if memory_store.mark_obsolete(memory_id) else "Memory not found."
+
+
 def recall_memory(mflow_bridge, question: str, top_k: int = 3) -> str:
     """深度记忆检索（M-flow 图路由）。
 
@@ -69,3 +96,10 @@ def _require_dependency(dependency, name: str) -> None:
 
     if dependency is None:
         raise RuntimeError(f"{name} dependency is not configured")
+
+
+def _format_memory_row(row: dict) -> str:
+    return (
+        f"[{row.get('id')}] {row.get('kind')} / {row.get('importance')}: "
+        f"{row.get('title')} - {row.get('content')}"
+    )

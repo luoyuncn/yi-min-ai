@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from agent.tools.builtin.file_ops import file_read, file_write
-from agent.tools.builtin.memory_tools import recall_memory
+from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, recall_memory
+from agent.memory.memory_store import MemoryStore
 from agent.memory.mflow_bridge import EpisodeBundle
 
 
@@ -51,3 +52,20 @@ def test_recall_memory_does_not_use_run_coroutine_threadsafe_on_current_loop(mon
     result = asyncio.run(_exercise())
 
     assert "Found 1 relevant episodes" in result
+
+
+def test_memory_tools_search_list_and_forget_memory_items(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "agent.db")
+    memory_id = store.add_item(
+        kind="preference",
+        title="咖啡偏好",
+        content="腿哥喜欢 Tims 冷萃美式。",
+        source_thread_id="thread-1",
+        source_message_id="msg-1",
+        source_sender_id="sender-1",
+    )
+
+    assert "咖啡偏好" in memory_search(store, query="冷萃", limit=5)
+    assert "Tims 冷萃美式" in memory_list_recent(store, limit=5)
+    assert memory_forget(store, memory_id=memory_id) == "ok"
+    assert memory_search(store, query="冷萃", limit=5) == "No memories found."

@@ -6,11 +6,13 @@
 """
 
 import logging
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 from agent.core.loop import AgentCore
 from agent.gateway.normalizer import NormalizedMessage
+from agent.memory.memory_store import MemoryStore
 
 
 class FakeProviderManager:
@@ -169,4 +171,93 @@ def test_agent_core_ingest_to_mflow_uses_session_history_without_warning(tmp_pat
     assert result == "已读取文件"
     assert len(ingested) == 1
     assert "M-flow ingestion failed" not in caplog.text
+
+
+class CapturingProviderManager:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def call(self, request):
+        self.requests.append(request)
+        return type("Resp", (), {"type": "text", "text": "好的，已记住。", "tool_calls": None})()
+
+
+def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
+    """成功回复后应写入记忆，下一轮应自动注入相关记忆。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    memory_store = MemoryStore(workspace / "agent.db")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider, memory_store=memory_store)
+
+    first = NormalizedMessage(
+        message_id="msg-remember",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="记住我喜欢 Tims 冷萃美式",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+    second = NormalizedMessage(
+        message_id="msg-recall",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我喜欢喝什么？",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(first)
+    core.run_sync(second)
+
+    assert memory_store.search("冷萃", limit=5)
+    second_system_content = provider.requests[-1].messages[0]["content"]
+    assert "[MEMORY ITEMS]" in second_system_content
+    assert "Tims 冷萃美式" in second_system_content
+    assert "[HUMAN CONTEXT]" in second_system_content
+    assert "ou-user-1" in second_system_content
+
+
+def test_agent_core_writes_react_log_for_model_decision_and_tool_result(tmp_path: Path) -> None:
+    """ReAct 轨迹应单独写入 logs/react.log，包含模型决策和工具结果。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    (workspace / "notes.txt").write_text("hello from file", encoding="utf-8")
+    core = AgentCore.build_for_test(workspace, FakeProviderManager())
+
+    message = NormalizedMessage(
+        message_id="react-msg-1",
+        session_id="cli:default",
+        sender="user",
+        body="读取 notes.txt",
+        attachments=[],
+        channel="cli",
+        metadata={},
+    )
+
+    result = core.run_sync(message)
+
+    assert result == "已读取文件"
+    react_log = workspace / "logs" / "react.log"
+    lines = [json.loads(line) for line in react_log.read_text(encoding="utf-8").splitlines()]
+    event_names = [line["event"] for line in lines]
+    assert "model_response" in event_names
+    assert "decision" in event_names
+    assert "tool_call" in event_names
+    assert "tool_result" in event_names
+    tool_result = next(line for line in lines if line["event"] == "tool_result")
+    assert tool_result["tool_name"] == "file_read"
+    assert "hello from file" in tool_result["result"]
 

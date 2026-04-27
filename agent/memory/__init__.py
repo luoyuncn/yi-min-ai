@@ -7,6 +7,8 @@
 
 from agent.memory.always_on import AlwaysOnMemory
 from agent.memory.ledger_store import LedgerStore
+from agent.memory.memory_extractor import MemoryCandidate, MemoryExtractor
+from agent.memory.memory_store import MemoryStore
 from agent.memory.mflow_bridge import (
     EpisodeBundle,
     MflowBridge,
@@ -22,6 +24,9 @@ __all__ = [
     "AlwaysOnMemory",
     "EpisodeBundle",
     "LedgerStore",
+    "MemoryCandidate",
+    "MemoryExtractor",
+    "MemoryStore",
     "MflowBridge",
     "MflowEmbeddingConfig",
     "MflowLLMConfig",

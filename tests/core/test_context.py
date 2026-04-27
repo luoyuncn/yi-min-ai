@@ -92,3 +92,31 @@ def test_context_assembler_includes_feishu_rendering_hint() -> None:
     assert "Current channel: feishu/feishu-main" in system_content
     assert "Avoid Markdown tables" in system_content
 
+
+def test_context_assembler_includes_human_context_and_memory_items() -> None:
+    """当前说话人和检索到的记忆应进入独立上下文块。"""
+
+    assembler = ContextAssembler(system_prompt="You are Yi Min.")
+
+    context = assembler.assemble(
+        soul_text="# Identity\nYi Min",
+        memory_text="# User Profile\n",
+        tool_index="Available Tools:",
+        skill_index="Available Skills:",
+        history=[],
+        user_message="我喜欢喝什么？",
+        channel="feishu",
+        channel_instance="feishu",
+        sender="ou-user-1",
+        metadata={"chat_type": "group"},
+        memory_items_text="- preference: 腿哥喜欢 Tims 冷萃美式。",
+    )
+
+    system_content = context[0]["content"]
+
+    assert "[HUMAN CONTEXT]" in system_content
+    assert "Current sender: ou-user-1" in system_content
+    assert "Chat type: group" in system_content
+    assert "[MEMORY ITEMS]" in system_content
+    assert "Tims 冷萃美式" in system_content
+

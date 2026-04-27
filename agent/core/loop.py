@@ -17,7 +17,8 @@ from uuid import uuid4
 from agent.core.compaction import CompactionEngine
 from agent.core.context import ContextAssembler
 from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk
-from agent.memory import AlwaysOnMemory, LedgerStore, NoteStore, SessionArchive, TurnData
+from agent.memory import AlwaysOnMemory, LedgerStore, MemoryExtractor, MemoryStore, NoteStore, SessionArchive, TurnData
+from agent.observability.react_log import ReactTraceLogger
 from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_now, text_preview, trace_fields
 from agent.session import SessionManager
 from agent.skills import SkillLoader
@@ -56,6 +57,9 @@ class AgentCore:
         skill_loader: SkillLoader,
         ledger_store: LedgerStore | None = None,
         note_store: NoteStore | None = None,
+        memory_store: MemoryStore | None = None,
+        memory_extractor: MemoryExtractor | None = None,
+        react_logger: ReactTraceLogger | None = None,
         mflow_bridge=None,
         max_iterations: int = 8,
         system_prompt: str = "You are Yi Min.",
@@ -72,6 +76,9 @@ class AgentCore:
         self.mflow_bridge = mflow_bridge
         self.max_iterations = max_iterations
         self.note_store = note_store
+        self.memory_store = memory_store
+        self.memory_extractor = memory_extractor
+        self.react_logger = react_logger or ReactTraceLogger(self.workspace_dir / "logs" / "react.log")
         self.context_assembler = ContextAssembler(system_prompt=system_prompt)
         self.compaction_engine = CompactionEngine(
             provider_manager=provider_manager,
@@ -85,6 +92,7 @@ class AgentCore:
             mflow_bridge=self.mflow_bridge,
             ledger_store=self.ledger_store,
             note_store=self.note_store,
+            memory_store=self.memory_store,
         )
         self.tool_executor = ToolExecutor(self.tool_registry)
 
@@ -154,12 +162,15 @@ class AgentCore:
             context = self.context_assembler.assemble(
                 soul_text=self.always_on_memory.load_soul(),
                 memory_text=self.always_on_memory.load_memory(),
+                memory_items_text=self._build_memory_items_text(message.body),
                 tool_index=self.tool_registry.get_index(),
                 skill_index=self.skill_loader.get_index(),
                 history=session.history,
                 user_message=message.body,
                 channel=message.channel,
                 channel_instance=message.channel_instance,
+                sender=message.sender,
+                metadata=message.metadata,
             )
             logger.info(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
@@ -180,6 +191,9 @@ class AgentCore:
                 runtime_control=runtime_control,
                 approval_store=approval_store,
                 thread_aliases=thread_aliases,
+                user_message=message.body,
+                source_message_id=message.message_id,
+                sender_id=message.sender,
             ):
                 yield event
         except Exception as exc:
@@ -208,6 +222,9 @@ class AgentCore:
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
         thread_aliases: list[str],
+        user_message: str,
+        source_message_id: str,
+        sender_id: str | None,
     ):
         for index in range(self.max_iterations):
             step_name = f"iteration-{index + 1}"
@@ -238,6 +255,15 @@ class AgentCore:
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=model_request_started step_name={step_name} context_messages={len(context)} "
                 f"tool_count={len(request.tools)}"
+            )
+            self.react_logger.record(
+                "model_request",
+                trace_id=message_metadata.get("trace_id"),
+                thread_id=thread_id,
+                run_id=run_id,
+                step_name=step_name,
+                context_messages=len(context),
+                tool_count=len(request.tools),
             )
 
             async for chunk in self._iter_provider_stream(request):
@@ -287,8 +313,29 @@ class AgentCore:
                 f"tool_call_count={len(response.tool_calls or [])} streamed_chars={len(streamed_text)} "
                 f"input_tokens={usage.get('input_tokens', -1)} output_tokens={usage.get('output_tokens', -1)}"
             )
+            self.react_logger.record(
+                "model_response",
+                trace_id=message_metadata.get("trace_id"),
+                thread_id=thread_id,
+                run_id=run_id,
+                step_name=step_name,
+                response_type=response.type,
+                provider=response.provider or "unknown",
+                model=response.model or "unknown",
+                text=response.text or "",
+                tool_calls=response.tool_calls or [],
+                usage=usage,
+            )
             self._ensure_active(runtime_control)
             if response.type == "text":
+                self.react_logger.record(
+                    "decision",
+                    trace_id=message_metadata.get("trace_id"),
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    step_name=step_name,
+                    decision="final_answer",
+                )
                 assistant_text = response.text or streamed_text
                 if emitted_stream_start:
                     tail_delta = self._stream_tail(streamed_text, assistant_text)
@@ -307,6 +354,13 @@ class AgentCore:
                     yield AssistantTextEndEvent(message_id=assistant_message_id)
                 session.append({"id": assistant_message_id, "role": "assistant", "content": assistant_text})
                 self.session_archive.persist_session(session)
+                self._extract_memories(
+                    user_message=user_message,
+                    assistant_text=assistant_text,
+                    thread_id=thread_id,
+                    source_message_id=source_message_id,
+                    sender_id=sender_id,
+                )
 
                 # 异步写入 M-flow（非阻塞）
                 await self._ingest_to_mflow(session, thread_id)
@@ -350,6 +404,15 @@ class AgentCore:
             }
             session.append(assistant_message)
             context.append(assistant_message)
+            self.react_logger.record(
+                "decision",
+                trace_id=message_metadata.get("trace_id"),
+                thread_id=thread_id,
+                run_id=run_id,
+                step_name=step_name,
+                decision="execute_tools",
+                tool_call_count=len(response.tool_calls or []),
+            )
 
             interrupted = False
             async for event in self._execute_tool_calls(
@@ -516,6 +579,16 @@ class AgentCore:
                 f"event=tool_execution_started step_name={step_name} tool_name={tool_call['name']} "
                 f"tool_call_id={tool_call['id']} args_chars={len(args_json)}"
             )
+            self.react_logger.record(
+                "tool_call",
+                trace_id=message_metadata.get("trace_id"),
+                thread_id=thread_id,
+                run_id=run_id,
+                step_name=step_name,
+                tool_call_id=tool_call["id"],
+                tool_name=tool_call["name"],
+                args=tool_call["input"],
+            )
             yield ToolCallStartEvent(
                 tool_call_id=tool_call["id"],
                 tool_call_name=tool_call["name"],
@@ -548,6 +621,17 @@ class AgentCore:
                 f"event=tool_execution_completed step_name={step_name} tool_name={tool_call['name']} "
                 f"tool_call_id={tool_call['id']} exec_ms={tool_exec_ms} roundtrip_ms={tool_roundtrip_ms} "
                 f"result_chars={len(result or '')} failed={self._is_tool_failure_result(result)}"
+            )
+            self.react_logger.record(
+                "tool_result",
+                trace_id=message_metadata.get("trace_id"),
+                thread_id=thread_id,
+                run_id=run_id,
+                step_name=step_name,
+                tool_call_id=tool_call["id"],
+                tool_name=tool_call["name"],
+                result=result,
+                failed=self._is_tool_failure_result(result),
             )
             session.append(tool_message)
             context.append(tool_message)
@@ -627,6 +711,9 @@ class AgentCore:
             runtime_control=runtime_control,
             approval_store=approval_store,
             thread_aliases=list(pending.thread_aliases[1:]),
+            user_message="",
+            source_message_id="",
+            sender_id=None,
         ):
             yield event
 
@@ -636,6 +723,71 @@ class AgentCore:
 
     def _requires_approval(self, tool_name: str) -> bool:
         return tool_name in {"file_write", "memory_write"}
+
+    def _build_memory_items_text(self, user_message: str) -> str:
+        if self.memory_store is None:
+            return ""
+
+        rows = []
+        seen_ids: set[str] = set()
+        for row in self.memory_store.list_recent(limit=5, kind="profile"):
+            rows.append(row)
+            seen_ids.add(row["id"])
+        for row in self.memory_store.list_recent(limit=5, kind="preference"):
+            if row["id"] in seen_ids:
+                continue
+            rows.append(row)
+            seen_ids.add(row["id"])
+        for row in self.memory_store.search(user_message, limit=5):
+            if row["id"] in seen_ids:
+                continue
+            rows.append(row)
+            seen_ids.add(row["id"])
+
+        return "\n".join(
+            f"- {row['kind']}: {row['title']} - {row['content']}"
+            for row in rows[:8]
+        )
+
+    def _extract_memories(
+        self,
+        *,
+        user_message: str,
+        assistant_text: str,
+        thread_id: str,
+        source_message_id: str,
+        sender_id: str | None,
+    ) -> None:
+        if self.memory_store is None or self.memory_extractor is None:
+            return
+
+        candidates = self.memory_extractor.extract(
+            user_message=user_message,
+            assistant_message=assistant_text,
+            thread_id=thread_id,
+            message_id=source_message_id,
+            sender_id=sender_id,
+        )
+        for candidate in candidates:
+            memory_id = self.memory_store.add_item(
+                kind=candidate.kind,
+                title=candidate.title,
+                content=candidate.content,
+                confidence=candidate.confidence,
+                importance=candidate.importance,
+                source_thread_id=candidate.source_thread_id,
+                source_message_id=candidate.source_message_id,
+                source_sender_id=candidate.source_sender_id,
+            )
+            self.react_logger.record(
+                "memory_write",
+                thread_id=thread_id,
+                source_message_id=source_message_id,
+                memory_id=memory_id,
+                kind=candidate.kind,
+                title=candidate.title,
+                content=candidate.content,
+            )
 
     async def _ingest_to_mflow(self, session, thread_id: str) -> None:
         """异步将最新一轮对话写入 M-flow（非阻塞）"""
@@ -692,7 +844,13 @@ class AgentCore:
             logging.getLogger(__name__).warning(f"M-flow ingestion failed: {e}")
 
     @classmethod
-    def build_for_test(cls, workspace_dir: Path, provider_manager) -> "AgentCore":
+    def build_for_test(
+        cls,
+        workspace_dir: Path,
+        provider_manager,
+        *,
+        memory_store: MemoryStore | None = None,
+    ) -> "AgentCore":
         """测试专用工厂。
 
         这样单元测试可以快速组一个最小可运行 Core，
@@ -709,4 +867,6 @@ class AgentCore:
             skill_loader=SkillLoader(workspace / "skills"),
             ledger_store=LedgerStore(workspace / "agent.db"),
             note_store=NoteStore(workspace / "agent.db"),
+            memory_store=memory_store,
+            memory_extractor=MemoryExtractor(),
         )

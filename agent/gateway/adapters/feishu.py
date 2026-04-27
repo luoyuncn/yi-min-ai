@@ -141,12 +141,16 @@ class FeishuAdapter:
 
             # 在线程 loop 上创建 ws.Client，确保其内部 Future（connection_lost_waiter）
             # 绑定到 ws_loop，而不是主 loop，避免 asyncio.shield() 跨 loop 的 RuntimeError。
-            self._ws_client = self._lark.ws.Client(
-                self.app_id,
-                self.app_secret,
-                event_handler=self._event_handler,
-                log_level=self._lark.LogLevel.INFO,
-            )
+            client_factory = getattr(self._lark.ws, "Client", None)
+            if client_factory is not None:
+                self._ws_client = client_factory(
+                    self.app_id,
+                    self.app_secret,
+                    event_handler=self._event_handler,
+                    log_level=self._lark.LogLevel.INFO,
+                )
+            elif getattr(self, "_ws_client", None) is None:
+                raise RuntimeError("Feishu WebSocket client factory is unavailable")
 
             ws_loop.run_until_complete(self._ws_client._connect())
             self._ws_connected.set()
@@ -216,8 +220,9 @@ class FeishuAdapter:
 
             # _on_message_receive 在 ws_loop 线程调用，必须通过 call_soon_threadsafe
             # 把 put_nowait 调度回主 loop，否则主 loop 上的 get() 永远不会被唤醒。
-            if self._main_loop is not None:
-                self._main_loop.call_soon_threadsafe(self._message_queue.put_nowait, normalized)
+            main_loop = getattr(self, "_main_loop", None)
+            if main_loop is not None:
+                main_loop.call_soon_threadsafe(self._message_queue.put_nowait, normalized)
             else:
                 self._message_queue.put_nowait(normalized)
             logger.debug(f"Feishu message queued: {message.message_id}")
