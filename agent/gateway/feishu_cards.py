@@ -222,7 +222,7 @@ class FeishuCardRenderer:
         return self._build_card(title="需要你确认", template="orange", elements=elements)
 
     def _build_ledger_draft_card(self, *, user_text: str, assistant_text: str, drafts: list[dict]) -> dict:
-        total_cent = sum((draft.get("amount_cent") or 0) for draft in drafts)
+        total_cent = sum(self._coerce_amount_cent(draft.get("amount_cent")) for draft in drafts)
         elements: list[dict] = []
         self._append_quote_note(elements, user_text)
         elements.extend(
@@ -241,7 +241,7 @@ class FeishuCardRenderer:
         for draft in drafts:
             label = self._label_for_occurred_at(draft.get("occurred_at")) or "待确认"
             merchant = draft.get("merchant") or "未填写"
-            amount = self._format_currency(draft.get("amount_cent") or 0)
+            amount = self._format_currency(self._coerce_amount_cent(draft.get("amount_cent")))
             category = draft.get("category") or "未分类"
             occurred_at = draft.get("occurred_at") or "时间待确认"
             note = draft.get("note") or "无备注"
@@ -543,9 +543,18 @@ class FeishuCardRenderer:
         return dt.strftime("%H:%M")
 
     def _format_currency(self, amount_cent: int) -> str:
+        amount_cent = self._coerce_amount_cent(amount_cent)
         sign = "-" if amount_cent < 0 else ""
         amount = abs(amount_cent) / 100
         return f"{sign}¥{amount:.2f}"
+
+    def _coerce_amount_cent(self, value) -> int:
+        if value is None or value == "":
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     def _truncate(self, text: str, limit: int) -> str:
         if len(text) <= limit:

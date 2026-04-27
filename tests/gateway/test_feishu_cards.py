@@ -98,6 +98,36 @@ def test_feishu_card_renderer_builds_ledger_draft_card_from_tool_args() -> None:
     assert any("¥42.00" in field["text"]["content"] for element in card["elements"] if element.get("tag") == "div" for field in element.get("fields", []))
 
 
+def test_feishu_card_renderer_accepts_string_amount_cent_in_ledger_drafts() -> None:
+    renderer = FeishuCardRenderer(agent_name="Yi Min")
+
+    card = renderer.render_final_card(
+        user_text="奶茶18块",
+        assistant_text="草稿准备好了。",
+        tool_calls=[
+            {
+                "tool_name": "ledger_upsert_draft",
+                "input": {
+                    "direction": "expense",
+                    "amount_cent": "1800",
+                    "currency": "CNY",
+                    "category": "drink",
+                    "merchant": "奶茶",
+                },
+            }
+        ],
+        tool_results=[],
+    )
+
+    assert card["header"]["title"]["content"] == "记账确认"
+    assert any(
+        "¥18.00" in field["text"]["content"]
+        for element in card["elements"]
+        if element.get("tag") == "div"
+        for field in element.get("fields", [])
+    )
+
+
 def test_feishu_card_renderer_builds_follow_up_card_for_questions() -> None:
     """需要用户确认时，应渲染成更适合回复的追问卡。"""
 

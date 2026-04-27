@@ -200,7 +200,7 @@ class LangfuseTraceClient:
         return self._start_observation("generation", "generation-create", name, **fields)
 
     def start_tool(self, name: str, **fields: Any):
-        return self._start_observation("tool", "observation-create", name, **fields)
+        return self._start_observation("tool", "span-create", name, **fields)
 
     def update_observation(
         self,
@@ -233,7 +233,7 @@ class LangfuseTraceClient:
         event_type = {
             "span": "span-update",
             "generation": "generation-update",
-            "tool": "observation-update",
+            "tool": "span-update",
         }[kind]
         body = {
             "id": observation_id,
@@ -245,8 +245,6 @@ class LangfuseTraceClient:
             "statusMessage": fields.get("status_message"),
             "endTime": fields.get("end_time"),
         }
-        if kind == "tool":
-            body["type"] = "TOOL"
         if kind == "generation":
             body["model"] = fields.get("model")
             body["usageDetails"] = fields.get("usage_details")
@@ -283,8 +281,6 @@ class LangfuseTraceClient:
             "metadata": fields.get("metadata"),
             "parentObservationId": parent.get("id") if parent.get("kind") != "trace" else None,
         }
-        if kind == "tool":
-            body["type"] = "TOOL"
         self._enqueue(event_type, body)
         return _LegacyObservation(
             self,
@@ -356,4 +352,3 @@ class LangfuseTraceClient:
     def _metadata_value(self, fields: dict[str, Any], key: str) -> Any:
         metadata = fields.get("metadata") or {}
         return metadata.get(key)
-
