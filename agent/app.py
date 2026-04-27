@@ -27,6 +27,7 @@ from agent.memory.mflow_bridge import (
 )
 from agent.session import SessionManager
 from agent.skills import SkillLoader
+from agent.tools.runtime_context import RuntimeServices
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,8 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
 
     db_path = workspace_dir / "agent.db"
     session_archive = SessionArchive(db_path)
+    runtime_services = RuntimeServices()
+    shell_settings = getattr(getattr(settings, "tools", None), "shell", None)
     core = AgentCore(
         workspace_dir=workspace_dir,
         provider_manager=provider_manager,
@@ -243,6 +246,9 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         memory_store=MemoryStore(db_path),
         memory_extractor=MemoryExtractor(),
         mflow_bridge=mflow_bridge,
+        runtime_services=runtime_services,
+        enable_shell=bool(getattr(shell_settings, "enabled", False)),
+        shell_requires_confirmation=bool(getattr(shell_settings, "requires_confirmation", True)),
         max_iterations=settings.agent.max_iterations,
         system_prompt=_build_system_prompt(settings.agent.name),
     )
@@ -303,6 +309,9 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
         ),
         "CRON.yaml": (
             "tasks: []\n"
+        ),
+        "REMINDERS.yaml": (
+            "reminders: []\n"
         ),
     }
     for filename, content in defaults.items():
@@ -374,6 +383,8 @@ def _build_system_prompt(agent_name: str) -> str:
             "Use ledger tools for bookkeeping requests involving income, expense, reimbursement, transfer, and spending summaries.",
             "Ask follow-up questions before committing incomplete ledger entries.",
             "Use note tools for long-lived user facts such as preferences, plans, constraints, profile facts, and important contacts.",
+            "Use reminder_create for one-shot reminders and relative reminders such as 'in 2 minutes'. Use cron tools only for recurring schedules.",
+            "For successful reminder or cron task creation, keep the final user-visible reply short and do not explain internal scheduling reasoning unless asked.",
             "Always save explicit remember requests as notes, and proactively save durable facts when confidence is high.",
             "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
             "Do not store bookkeeping or note facts in MEMORY.md or arbitrary files unless the user explicitly asks for that format.",

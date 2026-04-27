@@ -1,6 +1,8 @@
 """FeishuAdapter 回归测试。"""
 
 import asyncio
+import builtins
+import logging
 import json
 import threading
 from types import SimpleNamespace
@@ -8,6 +10,27 @@ from types import SimpleNamespace
 import pytest
 
 from agent.gateway.adapters.feishu import FeishuAdapter
+
+
+def test_feishu_adapter_logs_lark_sdk_import_duration(monkeypatch, caplog) -> None:
+    """首次加载 lark-oapi 较慢时，启动日志应显示正在导入 SDK。"""
+
+    original_import = builtins.__import__
+    fake_lark = SimpleNamespace()
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "lark_oapi":
+            return fake_lark
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    caplog.set_level(logging.INFO, logger="agent.gateway.adapters.feishu")
+
+    adapter = FeishuAdapter("app-id", "app-secret")
+
+    assert adapter._lark is fake_lark
+    assert "Loading lark-oapi SDK" in caplog.text
+    assert "lark-oapi SDK loaded" in caplog.text
 
 
 def test_feishu_adapter_runs_ws_client_with_thread_scoped_loop() -> None:

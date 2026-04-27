@@ -30,7 +30,7 @@ providers:
   # Deepseek
   - name: "deepseek"
     type: "openai"
-    model: "deepseek-v4-flash"
+    model: "deepseek-v4-pro"
     api_key_env: "DEEPSEEK_API_KEY"
     base_url: "https://api.deepseek.com/v1"
     extra_body:

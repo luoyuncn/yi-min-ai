@@ -7,6 +7,11 @@ providers:
   config_file: "providers.yaml"
   default_primary: "qwen"
 
+tools:
+  shell:
+    enabled: true
+    requires_confirmation: true
+
 # Optional M-flow runtime config.
 # If omitted, M-flow still tries to use the primary provider for LLM,
 # but embedding should be configured explicitly for production use.

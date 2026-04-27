@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -42,9 +43,15 @@ class FeishuAdapter:
         self._message_dedupe_ttl_secs = 120.0
 
         # 检查 lark-oapi 是否已安装
+        started_at = time.monotonic()
+        logger.info("Loading lark-oapi SDK...")
         try:
             import lark_oapi as lark
             self._lark = lark
+            logger.info(
+                "lark-oapi SDK loaded in %.0fms",
+                (time.monotonic() - started_at) * 1000,
+            )
         except ImportError:
             raise RuntimeError(
                 "lark-oapi not installed. Install with: pip install lark-oapi"
@@ -76,6 +83,11 @@ class FeishuAdapter:
         # 注意：ws.Client 必须在 _run_ws_client() 的线程 loop 上创建，
         # 否则其内部 connection_lost_waiter Future 会绑定到主 loop，
         # 导致 _receive_message_loop 里 asyncio.shield() 抛 "attached to a different loop"。
+
+        # 飞书是国内服务，不应走系统代理（如 Clash/V2Ray），否则会导致连接超时或卡顿
+        _no_proxy = os.environ.get("NO_PROXY", "")
+        if "feishu.cn" not in _no_proxy:
+            os.environ["NO_PROXY"] = f"{_no_proxy},.feishu.cn" if _no_proxy else ".feishu.cn"
 
         # 构建 API Client 用于主动发消息
         self._lark_client = (
@@ -345,8 +357,8 @@ class FeishuAdapter:
                 .build()
             )
 
-            response = self._lark_client.im.v1.message.create(request)
-            
+            response = await asyncio.to_thread(self._lark_client.im.v1.message.create, request)
+
             if not response.success():
                 logger.error(
                     f"Failed to send Feishu message: {response.code} {response.msg}"
@@ -380,7 +392,7 @@ class FeishuAdapter:
                 .build()
             )
 
-            response = self._lark_client.im.v1.message.create(request)
+            response = await asyncio.to_thread(self._lark_client.im.v1.message.create, request)
 
             if not response.success():
                 logger.error(
@@ -429,7 +441,7 @@ class FeishuAdapter:
             .build()
         )
 
-        response = self._lark_client.im.v1.message.reply(request)
+        response = await asyncio.to_thread(self._lark_client.im.v1.message.reply, request)
         if not response.success():
             raise RuntimeError(f"Failed to reply Feishu message: {response.code} {response.msg}")
 
@@ -467,7 +479,7 @@ class FeishuAdapter:
             .build()
         )
 
-        response = self._lark_client.im.v1.message.patch(request)
+        response = await asyncio.to_thread(self._lark_client.im.v1.message.patch, request)
         if not response.success():
             raise RuntimeError(f"Failed to update Feishu message: {response.code} {response.msg}")
 

@@ -7,6 +7,36 @@ from datetime import datetime
 import json
 import re
 
+TOOL_NAME_ZH: dict[str, str] = {
+    "file_read": "读取文件",
+    "file_write": "写入文件",
+    "ledger_upsert_draft": "记账草稿",
+    "ledger_get_active_draft": "查看草稿",
+    "ledger_commit_draft": "提交账目",
+    "ledger_query_entries": "查询账目",
+    "ledger_summary": "账目汇总",
+    "memory_write": "更新记忆",
+    "memory_search": "搜索记忆",
+    "memory_list_recent": "最近记忆",
+    "memory_forget": "遗忘记忆",
+    "note_add": "添加笔记",
+    "note_search": "搜索笔记",
+    "note_list_recent": "最近笔记",
+    "note_update": "更新笔记",
+    "search_sessions": "搜索历史会话",
+    "read_skill": "读取技能",
+    "cron_create_task": "创建定时任务",
+    "cron_update_task": "更新定时任务",
+    "cron_list_tasks": "查看定时任务",
+    "cron_delete_task": "删除定时任务",
+    "cron_run_now": "立即执行任务",
+    "reminder_create": "创建提醒",
+    "reminder_list": "查看提醒",
+    "reminder_delete": "删除提醒",
+    "shell_exec": "执行命令",
+    "web_search": "网络搜索",
+}
+
 
 @dataclass(slots=True)
 class ToolTrace:
@@ -89,12 +119,89 @@ class FeishuCardRenderer:
         return self._build_generic_answer_card(
             user_text=user_text,
             assistant_text=assistant_text,
+            traces=traces,
         )
 
-    def _build_generic_answer_card(self, *, user_text: str, assistant_text: str) -> dict:
+    def tool_name_zh(self, tool_name: str) -> str:
+        return TOOL_NAME_ZH.get(tool_name, tool_name)
+
+    def _build_tool_trace_panel(self, traces: list[ToolTrace]) -> dict | None:
+        called = [t for t in traces if t.tool_name]
+        if not called:
+            return None
+
+        lines: list[str] = []
+        for trace in called:
+            name_zh = self.tool_name_zh(trace.tool_name)
+            status = "⏳" if trace.result is None else ("❌" if self._is_tool_result_failed(trace.result) else "✅")
+            lines.append(f"{status} **{name_zh}**")
+            if trace.input:
+                brief = self._format_tool_input_brief(trace.tool_name, trace.input)
+                if brief:
+                    lines.append(f"　└ {brief}")
+
+        return {
+            "tag": "collapsible_panel",
+            "expanded": False,
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"🔧 调用了 {len(called)} 个工具",
+                },
+                "background_color": "grey",
+                "vertical_align": "center",
+            },
+            "elements": [self._build_markdown_block("\n".join(lines))],
+        }
+
+    def _is_tool_result_failed(self, result: str) -> bool:
+        if result.startswith("Tool execution failed:"):
+            return True
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(payload, dict) and bool(payload.get("error"))
+
+    def _format_tool_input_brief(self, tool_name: str, input_dict: dict) -> str:
+        if not input_dict:
+            return ""
+        if tool_name == "web_search":
+            return input_dict.get("query", "")
+        if tool_name in ("file_read", "file_write"):
+            return input_dict.get("path", "") or input_dict.get("file_path", "")
+        if tool_name in ("cron_create_task", "cron_update_task"):
+            name = input_dict.get("name", "")
+            schedule = input_dict.get("schedule", "")
+            return f"{name} ({schedule})" if name else schedule
+        if tool_name == "reminder_create":
+            return input_dict.get("message", "") or input_dict.get("text", "")
+        if tool_name in ("note_add", "note_update"):
+            return self._truncate(input_dict.get("content", "") or input_dict.get("title", ""), 40)
+        if tool_name in ("memory_search", "note_search", "search_sessions"):
+            return input_dict.get("query", "")
+        if tool_name == "shell_exec":
+            return self._truncate(input_dict.get("command", ""), 50)
+        first_val = next(iter(input_dict.values()), None)
+        if isinstance(first_val, str):
+            return self._truncate(first_val, 40)
+        return ""
+
+    def _build_generic_answer_card(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        traces: list[ToolTrace] | None = None,
+    ) -> dict:
         elements: list[dict] = []
         self._append_quote_note(elements, user_text)
         elements.extend(self._build_body_sections(assistant_text))
+        if traces:
+            panel = self._build_tool_trace_panel(traces)
+            if panel:
+                elements.append({"tag": "hr"})
+                elements.append(panel)
         elements.extend(
             [
                 {"tag": "hr"},
@@ -317,16 +424,22 @@ class FeishuCardRenderer:
         }
 
     def _normalize_tool_traces(self, tool_calls: list[dict], tool_results: list[dict]) -> list[ToolTrace]:
-        traces = [ToolTrace(tool_name=item.get("tool_name", ""), input=item.get("input"), result=None) for item in tool_calls]
-        for result in tool_results:
-            traces.append(
+        # tool_results is already a superset of completed tool_calls (same dict, filtered)
+        # Use tool_results as primary to avoid duplicating each call
+        if tool_results:
+            return [
                 ToolTrace(
-                    tool_name=result.get("tool_name", ""),
-                    input=result.get("input"),
-                    result=result.get("content"),
+                    tool_name=r.get("tool_name", ""),
+                    input=r.get("input"),
+                    result=r.get("content"),
                 )
-            )
-        return traces
+                for r in tool_results
+            ]
+        # Fallback for in-progress tools (no results yet)
+        return [
+            ToolTrace(tool_name=c.get("tool_name", ""), input=c.get("input"), result=None)
+            for c in tool_calls
+        ]
 
     def _extract_ledger_drafts(self, traces: list[ToolTrace]) -> list[dict]:
         drafts: list[dict] = []

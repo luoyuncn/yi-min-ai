@@ -13,7 +13,7 @@ from agent.gateway.instance_lock import InstanceLockError, acquire_instance_lock
 from agent.gateway.server import GatewayServer
 from agent.observability.logging import setup_logging
 from agent.runtime_paths import resolve_base_workspace
-from agent.scheduler import HeartbeatScheduler, CronScheduler
+from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,7 @@ async def run_server(
     gateway = None
     heartbeat_scheduler = None
     cron_scheduler = None
+    reminder_scheduler = None
 
     try:
         logger.info("=" * 60)
@@ -215,8 +216,21 @@ async def run_server(
                 gateway=gateway,
                 channel_instance=_default_channel_instance(settings),
             )
+            default_app.core.runtime_services.cron_scheduler = cron_scheduler
             await cron_scheduler.start()
             logger.info("✓ Cron 调度器已启动")
+
+            logger.info("启动 Reminder 调度器")
+            reminder_scheduler = ReminderScheduler(
+                config_path=workspace_dir / "REMINDERS.yaml",
+                workspace_dir=workspace_dir,
+                agent_core=default_app.core,
+                gateway=gateway,
+                channel_instance=_default_channel_instance(settings),
+            )
+            default_app.core.runtime_services.reminder_scheduler = reminder_scheduler
+            await reminder_scheduler.start()
+            logger.info("✓ Reminder 调度器已启动")
 
         # 7. 启动 Gateway 主循环
         logger.info("=" * 60)
@@ -237,6 +251,10 @@ async def run_server(
         if cron_scheduler:
             await cron_scheduler.stop()
             logger.info("✓ Cron 调度器已停止")
+
+        if reminder_scheduler:
+            await reminder_scheduler.stop()
+            logger.info("✓ Reminder 调度器已停止")
 
         if gateway is not None:
             await gateway.stop()

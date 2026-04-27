@@ -73,3 +73,51 @@ def test_stage1_registry_only_registers_recall_memory_when_mflow_is_available(tm
 
     assert "recall_memory" not in unavailable_registry.names()
     assert "recall_memory" in available_registry.names()
+
+
+def test_stage1_registry_exposes_cron_tools_when_scheduler_service_is_available(tmp_path) -> None:
+    from agent.tools.runtime_context import RuntimeServices
+
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+        runtime_services=RuntimeServices(cron_scheduler=object()),
+    )
+
+    assert "cron_create_task" in registry.names()
+    assert "cron_run_now" in registry.names()
+    assert "cron_list_tasks" in registry.names()
+    assert "cron_delete_task" in registry.names()
+
+
+def test_stage1_registry_exposes_reminder_tools_when_scheduler_service_is_available(tmp_path) -> None:
+    from agent.tools.runtime_context import RuntimeServices
+
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+        runtime_services=RuntimeServices(reminder_scheduler=object()),
+    )
+
+    assert "reminder_create" in registry.names()
+    assert "reminder_list" in registry.names()
+    assert "reminder_delete" in registry.names()
+    params = registry.get("reminder_create").schema["function"]["parameters"]
+    assert {"required": ["run_at"]} in params["anyOf"]
+    assert {"required": ["delay_seconds"]} in params["anyOf"]
+
+
+def test_stage1_registry_exposes_shell_when_enabled(tmp_path) -> None:
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+        enable_shell=True,
+    )
+
+    assert "shell_exec" in registry.names()

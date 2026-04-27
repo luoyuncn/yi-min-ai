@@ -31,10 +31,11 @@ class RunRequest(BaseModel):
     forwardedProps: dict | None = None
 
 
-def create_web_app(config_path: Path, testing: bool = False) -> FastAPI:
+def create_web_app(config_path: Path, testing: bool = False, agent_app=None) -> FastAPI:
     """创建本地 Web Agent 应用。"""
 
-    agent_app = build_app(config_path=config_path, testing=testing)
+    if agent_app is None:
+        agent_app = build_app(config_path=config_path, testing=testing)
     encoder = EventEncoder()
     static_dir = Path(__file__).parent / "static"
     built_dir = static_dir / "app"

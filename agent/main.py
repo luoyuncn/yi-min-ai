@@ -123,30 +123,44 @@ def main(
     # 打印启动信息
     _print_banner(mode, testing)
 
-    # 根据模式启动
-    if mode == "cli":
-        _run_cli(config, testing)
-    elif mode == "web":
-        _run_web(config, testing, web_port)
-    elif mode == "gateway":
-        asyncio.run(_run_gateway(
-            config_path=Path(config),
-            testing=testing,
-            enable_feishu=enable_feishu,
-            enable_heartbeat=enable_heartbeat,
-            heartbeat_interval=heartbeat_interval,
-            enable_cron=enable_cron,
-        ))
-    elif mode == "all":
-        asyncio.run(_run_all(
-            config_path=Path(config),
-            testing=testing,
-            enable_feishu=enable_feishu,
-            enable_heartbeat=enable_heartbeat,
-            heartbeat_interval=heartbeat_interval,
-            enable_cron=enable_cron,
-            web_port=web_port,
-        ))
+    try:
+        # 根据模式启动
+        if mode == "cli":
+            _run_cli(config, testing)
+        elif mode == "web":
+            _run_web(config, testing, web_port)
+        elif mode == "gateway":
+            asyncio.run(_run_gateway(
+                config_path=Path(config),
+                testing=testing,
+                enable_feishu=enable_feishu,
+                enable_heartbeat=enable_heartbeat,
+                heartbeat_interval=heartbeat_interval,
+                enable_cron=enable_cron,
+            ))
+        elif mode == "all":
+            asyncio.run(_run_all(
+                config_path=Path(config),
+                testing=testing,
+                enable_feishu=enable_feishu,
+                enable_heartbeat=enable_heartbeat,
+                heartbeat_interval=heartbeat_interval,
+                enable_cron=enable_cron,
+                web_port=web_port,
+            ))
+    except KeyboardInterrupt:
+        click.echo("\n收到停止信号，正在关闭...")
+        logger.info("收到停止信号，正在关闭...")
+
+
+def _apply_no_proxy() -> None:
+    """让国内服务直连，不走系统代理（Clash/V2Ray 等）。"""
+    import os
+    _bypass = ".feishu.cn,api.deepseek.com,dashscope.aliyuncs.com"
+    existing = os.environ.get("NO_PROXY", "")
+    missing = [d for d in _bypass.split(",") if d not in existing]
+    if missing:
+        os.environ["NO_PROXY"] = f"{existing},{','.join(missing)}" if existing else ",".join(missing)
 
 
 def _print_banner(mode: str, testing: bool):
@@ -196,9 +210,10 @@ async def _run_gateway(
     enable_cron: bool,
 ):
     """运行 Gateway 模式"""
+    _apply_no_proxy()
     from agent.app import build_channel_apps_async
     from agent.gateway.server import GatewayServer
-    from agent.scheduler import HeartbeatScheduler, CronScheduler
+    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
@@ -282,6 +297,7 @@ async def _run_gateway(
 
     # 5. 启动 Cron
     cron_scheduler = None
+    reminder_scheduler = None
     if enable_cron:
         logger.info("启动 Cron 调度器")
         cron_scheduler = CronScheduler(
@@ -291,8 +307,21 @@ async def _run_gateway(
             gateway=gateway,
             channel_instance=_default_channel_instance(settings),
         )
+        default_app.core.runtime_services.cron_scheduler = cron_scheduler
         await cron_scheduler.start()
         logger.info("✓ Cron 调度器已启动")
+
+        logger.info("启动 Reminder 调度器")
+        reminder_scheduler = ReminderScheduler(
+            config_path=workspace_dir / "REMINDERS.yaml",
+            workspace_dir=workspace_dir,
+            agent_core=default_app.core,
+            gateway=gateway,
+            channel_instance=_default_channel_instance(settings),
+        )
+        default_app.core.runtime_services.reminder_scheduler = reminder_scheduler
+        await reminder_scheduler.start()
+        logger.info("✓ Reminder 调度器已启动")
 
     # 6. 启动 Gateway 主循环
     logger.info("=" * 60)
@@ -310,6 +339,8 @@ async def _run_gateway(
             await heartbeat_scheduler.stop()
         if cron_scheduler:
             await cron_scheduler.stop()
+        if reminder_scheduler:
+            await reminder_scheduler.stop()
         await gateway.stop()
         logger.info("✓ 服务器已停止")
 
@@ -324,10 +355,11 @@ async def _run_all(
     web_port: int,
 ):
     """同时运行 Web + Gateway"""
+    _apply_no_proxy()
     import uvicorn
     from agent.app import build_app_async, build_channel_apps_async
     from agent.gateway.server import GatewayServer
-    from agent.scheduler import HeartbeatScheduler, CronScheduler
+    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
@@ -390,6 +422,7 @@ async def _run_all(
     # 4. 启动调度器
     heartbeat_scheduler = None
     cron_scheduler = None
+    reminder_scheduler = None
 
     if enable_heartbeat:
         heartbeat_scheduler = HeartbeatScheduler(
@@ -410,13 +443,25 @@ async def _run_all(
             gateway=gateway,
             channel_instance=_default_channel_instance(settings),
         )
+        app_instance.core.runtime_services.cron_scheduler = cron_scheduler
         await cron_scheduler.start()
         logger.info("✓ Cron 调度器已启动")
 
-    # 5. 启动 Web UI（在后台任务中）
-    from agent.web.app import create_app
+        reminder_scheduler = ReminderScheduler(
+            config_path=workspace_dir / "REMINDERS.yaml",
+            workspace_dir=workspace_dir,
+            agent_core=app_instance.core,
+            gateway=gateway,
+            channel_instance=_default_channel_instance(settings),
+        )
+        app_instance.core.runtime_services.reminder_scheduler = reminder_scheduler
+        await reminder_scheduler.start()
+        logger.info("✓ Reminder 调度器已启动")
 
-    web_app = create_app(app_instance, testing=testing)
+    # 5. 启动 Web UI（在后台任务中）
+    from agent.web.app import create_web_app
+
+    web_app = create_web_app(config_path, testing=testing, agent_app=app_instance)
 
     # 6. 同时运行 Gateway 和 Web
     logger.info("=" * 60)
@@ -452,6 +497,8 @@ async def _run_all(
             await heartbeat_scheduler.stop()
         if cron_scheduler:
             await cron_scheduler.stop()
+        if reminder_scheduler:
+            await reminder_scheduler.stop()
         await gateway.stop()
         logger.info("✓ 所有服务已停止")
 

@@ -97,6 +97,21 @@ class MflowSettings:
 
 
 @dataclass(slots=True)
+class ShellToolSettings:
+    """Shell tool exposure and approval behavior."""
+
+    enabled: bool = False
+    requires_confirmation: bool = True
+
+
+@dataclass(slots=True)
+class ToolSettings:
+    """Tool exposure settings."""
+
+    shell: ShellToolSettings
+
+
+@dataclass(slots=True)
 class Settings:
     """运行时顶层配置对象。
 
@@ -109,3 +124,4 @@ class Settings:
     providers: ProviderSettings
     channels: ChannelSettings | None = None
     mflow: MflowSettings | None = None
+    tools: ToolSettings | None = None

@@ -238,6 +238,38 @@ def test_load_settings_parses_provider_extra_body(tmp_path: Path) -> None:
     assert settings.providers.items[0].extra_body == {"enable_thinking": False}
 
 
+def test_load_settings_parses_shell_tool_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: qwen\n"
+        "tools:\n"
+        "  shell:\n"
+        "    enabled: true\n"
+        "    requires_confirmation: true\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.tools.shell.enabled is True
+    assert settings.tools.shell.requires_confirmation is True
+
+
 def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> None:
     """Provider 可选的公共生成参数应能从 YAML 正确解析出来。"""
 

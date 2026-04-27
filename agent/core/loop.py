@@ -23,6 +23,7 @@ from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_n
 from agent.session import SessionManager
 from agent.skills import SkillLoader
 from agent.tools import ToolExecutor, build_stage1_registry
+from agent.tools.runtime_context import RuntimeServices, RuntimeToolContext
 from agent.web.events import (
     AssistantTextDeltaEvent,
     AssistantTextEndEvent,
@@ -61,6 +62,9 @@ class AgentCore:
         memory_extractor: MemoryExtractor | None = None,
         react_logger: ReactTraceLogger | None = None,
         mflow_bridge=None,
+        runtime_services: RuntimeServices | None = None,
+        enable_shell: bool = False,
+        shell_requires_confirmation: bool = True,
         max_iterations: int = 8,
         system_prompt: str = "You are Yi Min.",
     ) -> None:
@@ -74,6 +78,8 @@ class AgentCore:
         self.skill_loader = skill_loader
         self.ledger_store = ledger_store
         self.mflow_bridge = mflow_bridge
+        self.runtime_services = runtime_services or RuntimeServices()
+        self.shell_requires_confirmation = shell_requires_confirmation
         self.max_iterations = max_iterations
         self.note_store = note_store
         self.memory_store = memory_store
@@ -93,6 +99,8 @@ class AgentCore:
             ledger_store=self.ledger_store,
             note_store=self.note_store,
             memory_store=self.memory_store,
+            runtime_services=self.runtime_services,
+            enable_shell=enable_shell,
         )
         self.tool_executor = ToolExecutor(self.tool_registry)
 
@@ -155,6 +163,9 @@ class AgentCore:
                     channel=message.channel,
                     runtime_control=runtime_control,
                     approval_store=approval_store,
+                    channel_instance=message.channel_instance,
+                    session_id=message.session_id,
+                    sender=message.sender,
                 ):
                     yield event
                 return
@@ -188,6 +199,9 @@ class AgentCore:
                 run_id=run_id,
                 message_metadata=metadata,
                 channel=message.channel,
+                channel_instance=message.channel_instance,
+                session_id=message.session_id,
+                sender=message.sender,
                 runtime_control=runtime_control,
                 approval_store=approval_store,
                 thread_aliases=thread_aliases,
@@ -219,6 +233,9 @@ class AgentCore:
         run_id: str,
         message_metadata: dict,
         channel: str,
+        channel_instance: str,
+        session_id: str,
+        sender: str | None,
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
         thread_aliases: list[str],
@@ -427,16 +444,66 @@ class AgentCore:
                 channel=channel,
                 approval_store=approval_store,
                 thread_aliases=thread_aliases,
+                channel_instance=channel_instance,
+                session_id=session_id,
+                sender=sender,
             ):
                 if isinstance(event, CustomEvent):
                     interrupted = True
+                if isinstance(event, RunErrorEvent):
+                    yield event
+                    return
                 yield event
+
+            direct_text = "" if interrupted else self._build_direct_tool_response(response.tool_calls or [], context)
+            if direct_text:
+                direct_message_id = str(uuid4())
+                if message_metadata.get("timing_first_token_run_ms") is None:
+                    message_metadata["timing_first_token_run_ms"] = elapsed_ms(
+                        message_metadata.get("run_started_at")
+                    )
+                yield AssistantTextStartEvent(message_id=direct_message_id)
+                yield AssistantTextDeltaEvent(message_id=direct_message_id, delta=direct_text)
+                yield AssistantTextEndEvent(message_id=direct_message_id)
+                session.append({"id": direct_message_id, "role": "assistant", "content": direct_text})
+                self.session_archive.persist_session(session)
+                self._extract_memories(
+                    user_message=user_message,
+                    assistant_text=direct_text,
+                    thread_id=thread_id,
+                    source_message_id=source_message_id,
+                    sender_id=sender_id,
+                )
+                await self._ingest_to_mflow(session, thread_id)
 
             yield StepFinishedEvent(step_name=step_name)
             logger.info(
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=step_finished step_name={step_name} step_ms={elapsed_ms(step_started_at)}"
             )
+            if direct_text:
+                self.react_logger.record(
+                    "decision",
+                    trace_id=message_metadata.get("trace_id"),
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    step_name=step_name,
+                    decision="direct_tool_response",
+                )
+                self._log_run_timing_summary(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    channel=channel,
+                    message_metadata=message_metadata,
+                )
+                message_metadata["run_finished_at"] = monotonic_now()
+                logger.info(
+                    f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                    f"event=run_finished total_ms={elapsed_ms(message_metadata.get('run_started_at'))} "
+                    f"result_chars={len(direct_text)} direct_tool_response=True"
+                )
+                yield RunFinishedEvent(thread_id=thread_id, run_id=run_id, result_text=direct_text)
+                return
             if interrupted:
                 self._log_run_timing_summary(
                     thread_id=thread_id,
@@ -504,7 +571,98 @@ class AgentCore:
         return ""
 
     def _is_tool_failure_result(self, result: str) -> bool:
-        return (result or "").startswith("Tool execution failed:")
+        if (result or "").startswith("Tool execution failed:"):
+            return True
+        try:
+            payload = json.loads(result or "")
+        except json.JSONDecodeError:
+            return False
+        return isinstance(payload, dict) and bool(payload.get("error"))
+
+    def _build_direct_tool_response(self, tool_calls: list[dict], context: list[dict]) -> str:
+        if len(tool_calls) != 1:
+            return ""
+
+        tool_call = tool_calls[0]
+        tool_name = tool_call.get("name", "")
+        if tool_name not in {
+            "cron_create_task",
+            "cron_update_task",
+            "cron_list_tasks",
+            "cron_delete_task",
+            "cron_run_now",
+            "reminder_create",
+            "reminder_list",
+            "reminder_delete",
+        }:
+            return ""
+
+        tool_result = self._find_tool_result_content(context, tool_call.get("id", ""))
+        if not tool_result:
+            return ""
+
+        try:
+            payload = json.loads(tool_result)
+        except json.JSONDecodeError:
+            if self._is_tool_failure_result(tool_result):
+                return self._format_direct_tool_response(tool_name, {"error": tool_result})
+            return ""
+
+        return self._format_direct_tool_response(tool_name, payload)
+
+    def _find_tool_result_content(self, context: list[dict], tool_call_id: str) -> str:
+        for message in reversed(context):
+            if message.get("role") == "tool" and message.get("tool_call_id") == tool_call_id:
+                return message.get("content", "")
+        return ""
+
+    def _format_direct_tool_response(self, tool_name: str, payload: dict) -> str:
+        if payload.get("error"):
+            action = {
+                "cron_create_task": "创建定时任务",
+                "cron_update_task": "更新定时任务",
+                "cron_delete_task": "删除定时任务",
+                "cron_run_now": "触发定时任务",
+                "reminder_create": "创建提醒",
+                "reminder_delete": "删除提醒",
+            }.get(tool_name, "执行工具")
+            return f"{action}失败：{payload.get('error')}"
+
+        if tool_name == "cron_list_tasks":
+            tasks = payload.get("tasks", [])
+            if not tasks:
+                return "你现在没有定时任务。"
+            enabled_count = sum(1 for task in tasks if task.get("enabled"))
+            return f"你现在有 {len(tasks)} 个定时任务，其中 {enabled_count} 个已启用。"
+
+        if tool_name == "reminder_list":
+            reminders = payload.get("reminders", [])
+            pending_count = sum(1 for item in reminders if item.get("status") == "pending")
+            if not reminders:
+                return "你现在没有一次性提醒。"
+            return f"你现在有 {len(reminders)} 个一次性提醒，其中 {pending_count} 个待执行。"
+
+        if tool_name in {"cron_create_task", "cron_update_task"}:
+            verb = "已创建" if tool_name == "cron_create_task" else "已更新"
+            next_run = payload.get("next_run_at") or "未计算"
+            return f"{verb}定时任务：{payload.get('name', payload.get('task_id', '未命名'))}，下次执行时间：{next_run}。"
+
+        if tool_name == "cron_delete_task":
+            status = "已删除" if payload.get("deleted") else "没有找到"
+            return f"{status}定时任务：{payload.get('task_id')}。"
+
+        if tool_name == "cron_run_now":
+            return f"已触发定时任务，本次 run_id：{payload.get('run_id')}。"
+
+        if tool_name == "reminder_create":
+            run_at = payload.get("run_at_display") or payload.get("run_at")
+            return f"已设置提醒：{payload.get('title', '提醒')}，将在 {run_at} 执行。"
+
+        if tool_name == "reminder_delete":
+            status = "已删除" if payload.get("deleted") else "没有找到"
+            return f"{status}提醒：{payload.get('reminder_id')}。"
+
+        return ""
 
     def _log_run_timing_summary(
         self,
@@ -541,8 +699,15 @@ class AgentCore:
         channel: str,
         approval_store: PendingApprovalStore | None,
         thread_aliases: list[str],
+        channel_instance: str,
+        session_id: str,
+        sender: str | None,
     ):
         for tool_call in tool_calls:
+            if self._requires_approval(tool_call["name"]) and approval_store is None:
+                yield RunErrorEvent(message="approval store unavailable", code="ApprovalStoreUnavailable")
+                return
+
             if approval_store is not None and self._requires_approval(tool_call["name"]):
                 approval = approval_store.create(
                     thread_id=thread_id,
@@ -597,7 +762,20 @@ class AgentCore:
             yield ToolCallArgsEvent(tool_call_id=tool_call["id"], delta=args_json)
 
             tool_exec_started_at = monotonic_now()
-            result = self.tool_executor.execute(tool_call["name"], tool_call["input"])
+            tool_context = RuntimeToolContext(
+                workspace_dir=self.workspace_dir,
+                run_id=run_id,
+                channel=channel,
+                channel_instance=channel_instance,
+                session_id=session_id,
+                sender=sender,
+                metadata=message_metadata,
+            )
+            result = self.tool_executor.execute(
+                tool_call["name"],
+                tool_call["input"],
+                context=tool_context,
+            )
             tool_exec_ms = elapsed_ms(tool_exec_started_at)
             tool_roundtrip_ms = elapsed_ms(tool_dispatch_started_at)
             message_metadata["timing_tool_exec_ms_total"] += tool_exec_ms
@@ -647,6 +825,9 @@ class AgentCore:
         channel: str,
         runtime_control: RunControl | None,
         approval_store: PendingApprovalStore | None,
+        channel_instance: str,
+        session_id: str,
+        sender: str | None,
     ):
         if approval_store is None:
             yield RunErrorEvent(message="approval store unavailable", code="ApprovalStoreUnavailable")
@@ -711,6 +892,9 @@ class AgentCore:
             runtime_control=runtime_control,
             approval_store=approval_store,
             thread_aliases=list(pending.thread_aliases[1:]),
+            channel_instance="default",
+            session_id=thread_id,
+            sender=None,
             user_message="",
             source_message_id="",
             sender_id=None,
@@ -722,7 +906,9 @@ class AgentCore:
             runtime_control.ensure_active()
 
     def _requires_approval(self, tool_name: str) -> bool:
-        return tool_name in {"file_write", "memory_write"}
+        if tool_name in {"file_write", "memory_write"}:
+            return True
+        return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
 
     def _build_memory_items_text(self, user_message: str) -> str:
         if self.memory_store is None:
@@ -850,6 +1036,9 @@ class AgentCore:
         provider_manager,
         *,
         memory_store: MemoryStore | None = None,
+        runtime_services: RuntimeServices | None = None,
+        enable_shell: bool = False,
+        shell_requires_confirmation: bool = True,
     ) -> "AgentCore":
         """测试专用工厂。
 
@@ -869,4 +1058,7 @@ class AgentCore:
             note_store=NoteStore(workspace / "agent.db"),
             memory_store=memory_store,
             memory_extractor=MemoryExtractor(),
+            runtime_services=runtime_services,
+            enable_shell=enable_shell,
+            shell_requires_confirmation=shell_requires_confirmation,
         )

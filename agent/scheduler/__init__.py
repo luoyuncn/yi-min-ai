@@ -2,5 +2,6 @@
 
 from agent.scheduler.heartbeat import HeartbeatScheduler
 from agent.scheduler.cron import CronScheduler
+from agent.scheduler.reminder import ReminderScheduler
 
-__all__ = ["HeartbeatScheduler", "CronScheduler"]
+__all__ = ["HeartbeatScheduler", "CronScheduler", "ReminderScheduler"]

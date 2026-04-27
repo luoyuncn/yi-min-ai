@@ -46,6 +46,7 @@ def test_context_assembler_includes_dynamic_system_time() -> None:
     assert "[SYSTEM TIME]" in system_content
     assert "2026-04-23" in system_content
     assert "18:40:00" in system_content
+    assert "2026-04-23T18:40:00+08:00" in system_content
 
 
 def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
@@ -119,4 +120,27 @@ def test_context_assembler_includes_human_context_and_memory_items() -> None:
     assert "Chat type: group" in system_content
     assert "[MEMORY ITEMS]" in system_content
     assert "Tims 冷萃美式" in system_content
+
+
+def test_context_assembler_routes_one_shot_reminders_to_reminder_tools() -> None:
+    assembler = ContextAssembler(
+        system_prompt="You are Yi Min.",
+        now_provider=lambda: datetime.fromisoformat("2026-04-27T12:37:00+08:00"),
+    )
+
+    context = assembler.assemble(
+        soul_text="# Identity\nYi Min",
+        memory_text="# User Profile\n",
+        tool_index="Available Tools:\n- reminder_create: Create one one-shot reminder",
+        skill_index="Available Skills:",
+        history=[],
+        user_message="2分钟后提醒我起床",
+        channel="feishu",
+    )
+
+    system_content = context[0]["content"]
+
+    assert "Use reminder_create for one-shot reminders" in system_content
+    assert "For relative reminders" in system_content
+    assert "reply with one short confirmation" in system_content
 

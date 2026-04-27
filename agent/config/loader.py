@@ -21,6 +21,8 @@ from agent.config.models import (
     ProviderConfigItem,
     ProviderSettings,
     Settings,
+    ShellToolSettings,
+    ToolSettings,
 )
 
 
@@ -88,6 +90,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             config_dir=config_dir,
             provider_names=provider_names,
         ),
+        tools=_build_tool_settings(_optional_mapping(raw, "tools")),
     )
 
 
@@ -365,4 +368,19 @@ def _build_mflow_embedding_settings(
         api_version=_optional_str(data, "api_version"),
         dimensions=_optional_int(data, "dimensions"),
         batch_size=_optional_int(data, "batch_size"),
+    )
+
+
+def _build_tool_settings(data: dict | None) -> ToolSettings:
+    if data is None:
+        return ToolSettings(shell=ShellToolSettings())
+
+    shell_data = _optional_mapping(data, "shell") or {}
+    enabled = _optional_bool(shell_data, "enabled")
+    requires_confirmation = _optional_bool(shell_data, "requires_confirmation")
+    return ToolSettings(
+        shell=ShellToolSettings(
+            enabled=False if enabled is None else enabled,
+            requires_confirmation=True if requires_confirmation is None else requires_confirmation,
+        )
     )

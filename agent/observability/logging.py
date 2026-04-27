@@ -13,6 +13,7 @@ class SensitiveDataFilter(logging.Filter):
         (r"(api[_-]?key['\"]?\s*[:=]\s*['\"]?)([A-Za-z0-9_-]{20,})", r"\1***REDACTED***"),
         (r"(sk-[A-Za-z0-9]{20,})", r"sk-***REDACTED***"),
         (r"(claude-[A-Za-z0-9]{20,})", r"claude-***REDACTED***"),
+        (r"((?:access_key|ticket)=)([^&\s]+)", r"\1***REDACTED***"),
         # Bearer tokens
         (r"(Bearer\s+)([A-Za-z0-9_.-]+)", r"\1***REDACTED***"),
         # 密码

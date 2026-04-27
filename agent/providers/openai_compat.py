@@ -9,6 +9,7 @@ OpenAI、Azure OpenAI、DeepSeek、Ollama、vLLM 等。
 import json
 import logging
 import os
+from time import monotonic
 from urllib.parse import urlsplit, urlunsplit
 
 from openai import AsyncOpenAI
@@ -29,7 +30,7 @@ class OpenAICompatProvider(LLMProvider):
         api_key = os.environ.get(self.config.api_key_env)
         if not api_key:
             raise ValueError(f"Missing API key: {self.config.api_key_env}")
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": api_key, "max_retries": 0, "timeout": 30.0}
         if self.config.base_url:
             kwargs["base_url"] = self._normalize_base_url(self.config.base_url)
         self._client = AsyncOpenAI(**kwargs)
@@ -45,14 +46,36 @@ class OpenAICompatProvider(LLMProvider):
 
         kwargs = self._build_request_kwargs(request)
         kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
         self._log_request_config(kwargs, stream=True)
+        stream_started_at = monotonic()
         stream = await self._client.chat.completions.create(**kwargs)
 
         text_parts: list[str] = []
         tool_calls: dict[int, dict[str, object]] = {}
         usage: dict[str, int] = {}
+        chunk_count = 0
+        content_chunks = 0
+        tool_call_chunks = 0
+        reasoning_chunks = 0
+        reasoning_chars = 0
+        empty_choice_chunks = 0
+        first_chunk_ms: int | None = None
+        first_content_ms: int | None = None
+        last_content_ms: int | None = None
+        max_chunk_gap_ms = 0
+        previous_chunk_at: float | None = None
 
         async for chunk in stream:
+            chunk_count += 1
+            now = monotonic()
+            elapsed = int((now - stream_started_at) * 1000)
+            if first_chunk_ms is None:
+                first_chunk_ms = elapsed
+            if previous_chunk_at is not None:
+                max_chunk_gap_ms = max(max_chunk_gap_ms, int((now - previous_chunk_at) * 1000))
+            previous_chunk_at = now
+
             if getattr(chunk, "usage", None):
                 usage = {
                     "input_tokens": chunk.usage.prompt_tokens,
@@ -60,16 +83,26 @@ class OpenAICompatProvider(LLMProvider):
                 }
 
             if not getattr(chunk, "choices", None):
+                empty_choice_chunks += 1
                 continue
 
             choice = chunk.choices[0]
             delta = choice.delta
+            reasoning_content = getattr(delta, "reasoning_content", None)
+            if reasoning_content:
+                reasoning_chunks += 1
+                reasoning_chars += len(reasoning_content)
 
             if delta.content:
+                content_chunks += 1
+                last_content_ms = elapsed
+                if first_content_ms is None:
+                    first_content_ms = elapsed
                 text_parts.append(delta.content)
                 yield LLMStreamChunk(type="text_delta", delta=delta.content)
 
             for tool_call in delta.tool_calls or []:
+                tool_call_chunks += 1
                 current = tool_calls.setdefault(
                     tool_call.index,
                     {
@@ -99,6 +132,19 @@ class OpenAICompatProvider(LLMProvider):
         ]
         response_text = "".join(text_parts) or None
         response_type = "tool_calls" if converted_tool_calls else "text"
+        total_ms = int((monotonic() - stream_started_at) * 1000)
+        logger.info(
+            "event=provider_stream_summary "
+            f"provider={self.config.name} model={self.config.model} total_ms={total_ms} "
+            f"chunks={chunk_count} content_chunks={content_chunks} tool_call_chunks={tool_call_chunks} "
+            f"empty_choice_chunks={empty_choice_chunks} reasoning_chunks={reasoning_chunks} "
+            f"reasoning_chars={reasoning_chars} content_chars={len(response_text or '')} "
+            f"first_chunk_ms={first_chunk_ms if first_chunk_ms is not None else -1} "
+            f"first_content_ms={first_content_ms if first_content_ms is not None else -1} "
+            f"last_content_ms={last_content_ms if last_content_ms is not None else -1} "
+            f"max_chunk_gap_ms={max_chunk_gap_ms} "
+            f"input_tokens={usage.get('input_tokens', -1)} output_tokens={usage.get('output_tokens', -1)}"
+        )
         yield LLMStreamChunk(
             type="response",
             response=LLMResponse(
@@ -143,6 +189,8 @@ class OpenAICompatProvider(LLMProvider):
             "event=provider_request_config "
             f"provider={self.config.name} model={self.config.model} stream={stream} "
             f"message_count={len(kwargs.get('messages', []))} tool_count={len(kwargs.get('tools', []))} "
+            f"message_chars={_json_char_count(kwargs.get('messages', []))} "
+            f"tool_schema_chars={_json_char_count(kwargs.get('tools', []))} "
             f"max_tokens={kwargs.get('max_tokens')} temperature={kwargs.get('temperature')} "
             f"top_p={kwargs.get('top_p')} enable_thinking={enable_thinking} "
             f"thinking_type={thinking_type} "
@@ -260,3 +308,10 @@ class OpenAICompatProvider(LLMProvider):
             return base_url.rstrip("/")
 
         return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
+
+
+def _json_char_count(value) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False))
+    except TypeError:
+        return -1

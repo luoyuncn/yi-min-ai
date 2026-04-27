@@ -36,6 +36,8 @@ def test_initialize_appends_v1_for_bare_base_url(monkeypatch) -> None:
     asyncio.run(provider.initialize())
 
     assert captured["base_url"] == "http://example.com:8888/v1"
+    assert captured["max_retries"] == 0
+    assert captured["timeout"] == 30.0
 
 
 def test_convert_response_raises_helpful_error_for_html_page() -> None:
@@ -128,6 +130,7 @@ async def test_call_stream_yields_text_deltas_and_final_response(monkeypatch) ->
     ]
 
     assert captured["stream"] is True
+    assert captured["stream_options"] == {"include_usage": True}
     assert [chunk.delta for chunk in chunks if chunk.type == "text_delta"] == ["你", "好"]
     final_chunk = chunks[-1]
     assert final_chunk.type == "response"
@@ -275,6 +278,72 @@ async def test_call_stream_logs_provider_request_config_for_thinking_mode(monkey
 
     assert "event=provider_request_config" in caplog.text
     assert "enable_thinking=False" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_call_stream_logs_stream_summary_with_chunk_timing(monkeypatch, caplog) -> None:
+    """流式慢请求应有 chunk 层摘要，判断慢在 provider 还是上层消费。"""
+
+    class FakeStream:
+        def __init__(self) -> None:
+            self._chunks = iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content="你", tool_calls=None, reasoning_content=None)
+                            )
+                        ],
+                        usage=None,
+                    ),
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content="", tool_calls=None, reasoning_content="思考")
+                            )
+                        ],
+                        usage=None,
+                    ),
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return FakeStream()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_compat_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    caplog.set_level("INFO", logger="agent.providers.openai_compat")
+
+    provider = OpenAICompatProvider(
+        ProviderConfig(
+            name="qwen",
+            provider_type="openai",
+            model="qwen3.6-plus",
+            api_key_env="OPENAI_API_KEY",
+        )
+    )
+    await provider.initialize()
+
+    async for _ in provider.call_stream(LLMRequest(messages=[{"role": "user", "content": "你好"}])):
+        pass
+
+    assert "event=provider_stream_summary" in caplog.text
+    assert "content_chunks=1" in caplog.text
+    assert "reasoning_chunks=1" in caplog.text
 
 
 @pytest.mark.asyncio

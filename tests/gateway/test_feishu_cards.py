@@ -20,6 +20,33 @@ def test_feishu_card_renderer_builds_generic_answer_card() -> None:
     assert any(element.get("tag") == "div" for element in card["elements"])
 
 
+def test_feishu_card_renderer_marks_failed_tool_result() -> None:
+    renderer = FeishuCardRenderer(agent_name="Yi Min")
+
+    card = renderer.render_final_card(
+        user_text="设置一个5分钟后的提醒，让我喝水",
+        assistant_text="创建提醒失败：提醒时间已过去。",
+        tool_calls=[],
+        tool_results=[
+            {
+                "tool_name": "reminder_create",
+                "input": {"message": "该喝水了！"},
+                "content": '{"error": "提醒时间已过去"}',
+            }
+        ],
+    )
+
+    panel_text = "\n".join(
+        element["text"]["content"]
+        for panel in card["elements"]
+        if panel.get("tag") == "collapsible_panel"
+        for element in panel.get("elements", [])
+        if element.get("tag") == "div"
+    )
+    assert "❌" in panel_text
+    assert "创建提醒" in panel_text
+
+
 def test_feishu_card_renderer_builds_ledger_draft_card_from_tool_args() -> None:
     """记账草稿确认应优先渲染成结构化账单卡。"""
 

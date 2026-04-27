@@ -13,7 +13,7 @@ class ToolExecutor:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
 
-    def execute(self, name: str, params: dict) -> str:
+    def execute(self, name: str, params: dict, *, context=None) -> str:
         """执行单个工具调用。
 
         这里统一兜底异常，是为了让上层把错误当成“工具结果”继续处理，
@@ -22,6 +22,8 @@ class ToolExecutor:
 
         tool = self.registry.get(name)
         try:
+            if tool.accepts_context:
+                return tool.handler(context=context, **params)
             return tool.handler(**params)
         except Exception as exc:
             return f"Tool execution failed: {type(exc).__name__}: {exc}"

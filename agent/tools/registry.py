@@ -7,6 +7,13 @@
 from functools import partial
 from pathlib import Path
 
+from agent.tools.builtin.cron_tools import (
+    cron_create_task,
+    cron_delete_task,
+    cron_list_tasks,
+    cron_run_now,
+    cron_update_task,
+)
 from agent.tools.builtin.file_ops import file_read, file_write
 from agent.tools.builtin.ledger_tools import (
     ledger_commit_draft,
@@ -17,10 +24,12 @@ from agent.tools.builtin.ledger_tools import (
 )
 from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, memory_write, recall_memory
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
+from agent.tools.builtin.reminder_tools import reminder_create, reminder_delete, reminder_list
 from agent.tools.builtin.session_tools import read_skill, search_sessions
 from agent.tools.builtin.shell_tools import shell_exec
 from agent.tools.builtin.web_tools import web_search
 from agent.tools.models import ToolDefinition
+from agent.tools.runtime_context import RuntimeServices
 
 
 class ToolRegistry:
@@ -67,6 +76,7 @@ def build_stage1_registry(
     ledger_store=None,
     note_store=None,
     memory_store=None,
+    runtime_services: RuntimeServices | None = None,
     enable_shell: bool = False,
     enable_web_search: bool = True,
 ) -> ToolRegistry:
@@ -320,6 +330,124 @@ def build_stage1_registry(
         )
     )
 
+    if runtime_services is not None:
+        registry.register(
+            ToolDefinition(
+                name="cron_create_task",
+                description="Create a cron task that becomes active immediately and persists to CRON.yaml.",
+                schema=_schema(
+                    "cron_create_task",
+                    "Create live cron task",
+                    {
+                        "name": _string_field("Task name"),
+                        "schedule": _string_field("Cron expression, e.g. 0 9 * * *"),
+                        "prompt": _string_field("Prompt to run when the task fires"),
+                        "timezone": _string_field("IANA timezone, e.g. Asia/Shanghai"),
+                        "description": _optional_string_field("Task description"),
+                        "output_channel": _optional_string_field("Output channel, default current channel"),
+                        "output_session_id": _optional_string_field("Output session id, default current session"),
+                        "enabled": _boolean_field("Whether the task is enabled"),
+                    },
+                    required=["name", "schedule", "prompt", "timezone", "enabled"],
+                ),
+                handler=partial(cron_create_task, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="cron_update_task",
+                description="Update a live cron task and persist it to CRON.yaml.",
+                schema=_schema(
+                    "cron_update_task",
+                    "Update live cron task",
+                    {
+                        "task_id": _string_field("Existing task id"),
+                        "name": _string_field("Task name"),
+                        "schedule": _string_field("Cron expression"),
+                        "prompt": _string_field("Prompt to run when the task fires"),
+                        "timezone": _string_field("IANA timezone"),
+                        "description": _optional_string_field("Task description"),
+                        "output_channel": _optional_string_field("Output channel"),
+                        "output_session_id": _optional_string_field("Output session id"),
+                        "enabled": _boolean_field("Whether the task is enabled"),
+                    },
+                    required=["task_id", "name", "schedule", "prompt", "timezone", "enabled"],
+                ),
+                handler=partial(cron_update_task, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="cron_list_tasks",
+                description="List live cron tasks with next run and last run ids.",
+                schema=_schema("cron_list_tasks", "List live cron tasks", {}, required=[]),
+                handler=partial(cron_list_tasks, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="cron_delete_task",
+                description="Delete a live cron task and persist CRON.yaml.",
+                schema=_schema(
+                    "cron_delete_task",
+                    "Delete live cron task",
+                    {"task_id": _string_field("Task id")},
+                ),
+                handler=partial(cron_delete_task, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="cron_run_now",
+                description="Trigger one cron task immediately and return the generated run id.",
+                schema=_schema(
+                    "cron_run_now",
+                    "Run live cron task now",
+                    {"task_id": _string_field("Task id")},
+                ),
+                handler=partial(cron_run_now, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="reminder_create",
+                description=(
+                    "Create a one-shot reminder. Use this for relative or absolute reminders such as "
+                    "'in 2 minutes', 'today at 12:39', or 'tomorrow morning'. Prefer delay_seconds for relative times."
+                ),
+                schema=_reminder_create_schema(),
+                handler=partial(reminder_create, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="reminder_list",
+                description="List one-shot reminders with due time, status, and last run id.",
+                schema=_schema("reminder_list", "List one-shot reminders", {}, required=[]),
+                handler=partial(reminder_list, runtime_services),
+                accepts_context=True,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="reminder_delete",
+                description="Delete one one-shot reminder and persist REMINDERS.yaml.",
+                schema=_schema(
+                    "reminder_delete",
+                    "Delete one-shot reminder",
+                    {"reminder_id": _string_field("Reminder id")},
+                ),
+                handler=partial(reminder_delete, runtime_services),
+                accepts_context=True,
+            )
+        )
+
     # M-flow 深度检索（可选）
     if mflow_bridge is not None and getattr(mflow_bridge, "is_available", False):
         registry.register(
@@ -403,6 +531,28 @@ def _schema(name: str, description: str, properties: dict, required: list[str] |
             },
         },
     }
+
+
+def _reminder_create_schema() -> dict:
+    schema = _schema(
+        "reminder_create",
+        "Create one-shot reminder",
+        {
+            "title": _string_field("Short reminder title"),
+            "message": _string_field("Reminder text to send when due"),
+            "run_at": _optional_string_field("Absolute ISO 8601 datetime. Use null when using delay_seconds."),
+            "delay_seconds": _optional_integer_field("Relative delay in seconds, e.g. 300 for five minutes."),
+            "timezone": _string_field("IANA timezone for naive run_at values, e.g. Asia/Shanghai"),
+            "output_channel": _optional_string_field("Output channel, default current channel"),
+            "output_session_id": _optional_string_field("Output session id, default current session"),
+        },
+        required=["title", "message", "timezone"],
+    )
+    schema["function"]["parameters"]["anyOf"] = [
+        {"required": ["run_at"]},
+        {"required": ["delay_seconds"]},
+    ]
+    return schema
 
 
 def _string_field(description: str) -> dict:

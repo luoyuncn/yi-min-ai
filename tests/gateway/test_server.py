@@ -10,6 +10,7 @@ from agent.web.events import (
     AssistantTextDeltaEvent,
     AssistantTextEndEvent,
     AssistantTextStartEvent,
+    CustomEvent,
     RunFinishedEvent,
     RunStartedEvent,
     ToolCallArgsEvent,
@@ -310,3 +311,84 @@ def test_gateway_server_renders_ledger_scene_as_structured_card() -> None:
         for field in element.get("fields", [])
     ]
     assert any("老乡鸡" in text and "¥27.00" in text for text in field_texts)
+
+
+class FakeApprovalInterruptCore:
+    async def run_events(self, message, *, approval_store=None):
+        yield RunStartedEvent(thread_id=message.thread_key, run_id=message.message_id)
+        yield CustomEvent(
+            name="on_interrupt",
+            value={
+                "approval_id": "approval-1",
+                "thread_id": message.thread_key,
+                "run_id": message.message_id,
+                "tool_name": "shell_exec",
+                "tool_call_id": "tool-shell-1",
+                "args": {"command": "echo ok", "timeout": 30},
+                "message": "Approval required for shell_exec",
+            },
+        )
+        yield RunFinishedEvent(thread_id=message.thread_key, run_id=message.message_id, result_text="")
+
+
+def test_gateway_server_feishu_shell_interrupt_renders_confirmation_prompt() -> None:
+    gateway = GatewayServer(SimpleNamespace(core=FakeApprovalInterruptCore()))
+    gateway._feishu_patch_interval_secs = 0.0
+    adapter = FakeFeishuAdapter()
+    gateway.adapters["feishu"] = adapter
+
+    message = NormalizedMessage(
+        message_id="run-shell-1",
+        session_id="chat-shell-1",
+        sender="user-shell",
+        body="帮我执行 echo ok",
+        attachments=[],
+        channel="feishu",
+        metadata={"source_message_id": "src-shell-1"},
+    )
+
+    result = asyncio.run(gateway._handle_message(message))
+
+    assert "确认 approval-1" in result
+    assert "拒绝 approval-1" in result
+    assert adapter.calls[-1][0] == "update_card"
+    assert "echo ok" in str(adapter.calls[-1][2])
+
+
+class FakeApprovalResumeCore:
+    def __init__(self) -> None:
+        self.messages = []
+        self.approval_stores = []
+
+    async def run_events(self, message, *, approval_store=None):
+        self.messages.append(message)
+        self.approval_stores.append(approval_store)
+        yield RunStartedEvent(thread_id=message.thread_key, run_id=message.message_id)
+        yield AssistantTextStartEvent(message_id="assistant-resume")
+        yield AssistantTextDeltaEvent(message_id="assistant-resume", delta="已执行")
+        yield AssistantTextEndEvent(message_id="assistant-resume")
+        yield RunFinishedEvent(thread_id=message.thread_key, run_id=message.message_id, result_text="已执行")
+
+
+def test_gateway_server_feishu_confirmation_resumes_pending_approval() -> None:
+    core = FakeApprovalResumeCore()
+    gateway = GatewayServer(SimpleNamespace(core=core))
+    adapter = FakeFeishuAdapter()
+    gateway.adapters["feishu"] = adapter
+
+    message = NormalizedMessage(
+        message_id="run-confirm-1",
+        session_id="chat-confirm-1",
+        sender="user-confirm",
+        body="确认 approval-1",
+        attachments=[],
+        channel="feishu",
+        metadata={"source_message_id": "src-confirm-1"},
+    )
+
+    result = asyncio.run(gateway._handle_message(message))
+
+    assert result == "已执行"
+    assert core.messages[0].metadata["command"]["resume"]["approved"] is True
+    assert core.messages[0].metadata["command"]["interrupt_event"]["approval_id"] == "approval-1"
+    assert core.approval_stores[0] is gateway.pending_approvals

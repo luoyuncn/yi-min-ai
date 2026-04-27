@@ -71,6 +71,7 @@ class ContextAssembler:
         system_time_block = "\n".join(
             [
                 "[SYSTEM TIME]",
+                f"Current local datetime ISO: {current_time.isoformat()}",
                 f"Current local datetime: {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
                 f"Current local date: {current_time.strftime('%Y-%m-%d')}",
                 f"Timezone: {current_time.tzinfo}",
@@ -83,7 +84,17 @@ class ContextAssembler:
         if channel == "feishu":
             channel_block_lines.append("Avoid Markdown tables. Prefer short paragraphs and flat bullet lists.")
             channel_block_lines.append("Keep formatting stable in Feishu cards. Do not rely on table rendering.")
+            channel_block_lines.append("Reply concisely after successful tool calls; do not narrate hidden reasoning.")
         channel_block = "\n".join(channel_block_lines)
+        reminder_policy_block = "\n".join(
+            [
+                "[REMINDER ROUTING]",
+                "Use reminder_create for one-shot reminders, alarms, and relative reminders.",
+                "Use cron tools only for recurring schedules such as daily, weekly, or monthly tasks.",
+                "For relative reminders, pass delay_seconds instead of calculating a cron expression.",
+                "After a reminder is created, reply with one short confirmation including the due time.",
+            ]
+        )
         human_block_lines = [
             "[HUMAN CONTEXT]",
             f"Current sender: {sender or 'unknown'}",
@@ -107,6 +118,7 @@ class ContextAssembler:
                 "[MEMORY.md]",
                 memory_text,
                 memory_items_block,
+                reminder_policy_block,
                 "[TOOL INDEX]",
                 tool_index,
                 "[SKILL INDEX]",

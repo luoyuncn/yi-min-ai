@@ -21,14 +21,15 @@ def web_search(query: str, num_results: int = 5) -> str:
     - 返回标题、摘要和链接
     """
     try:
-        # 尝试导入 duckduckgo_search
-        from duckduckgo_search import DDGS
-
+        from ddgs import DDGS
     except ImportError:
-        return (
-            "Web search unavailable: duckduckgo_search not installed. "
-            "Install with: pip install duckduckgo-search"
-        )
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return (
+                "Web search unavailable: ddgs not installed. "
+                "Install with: pip install ddgs"
+            )
 
     try:
         logger.info(f"Web search: {query}")

@@ -8,17 +8,19 @@ from typing import Optional
 from agent.app import AgentApplication
 from agent.gateway.adapters import FeishuAdapter
 from agent.gateway.command_queue import CommandQueue
-from agent.gateway.feishu_cards import FeishuCardRenderer
+from agent.gateway.feishu_cards import FeishuCardRenderer, TOOL_NAME_ZH
 from agent.gateway.normalizer import NormalizedMessage, build_thread_key
 from agent.observability.tracing import elapsed_ms, ensure_trace_id, mark_monotonic, text_preview, trace_fields
 from agent.web.events import (
     AssistantTextDeltaEvent,
+    CustomEvent,
     RunErrorEvent,
     RunFinishedEvent,
     ToolCallArgsEvent,
     ToolCallResultEvent,
     ToolCallStartEvent,
 )
+from agent.web.runtime_state import PendingApprovalStore
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,9 @@ class GatewayServer:
         self.command_queue = CommandQueue(handler=self._handle_message)
         self.adapters: dict[str, any] = {}
         self._running = False
-        self._feishu_patch_interval_secs = 0.8
+        self._feishu_patch_interval_secs = 0.25
         self._feishu_card_renderers: dict[str, FeishuCardRenderer] = {}
+        self.pending_approvals = PendingApprovalStore()
 
     def register_runtime_app(self, runtime_id: str, app: AgentApplication) -> None:
         """注册一个 runtime 对应的 AgentApplication。"""
@@ -190,6 +193,10 @@ class GatewayServer:
         if adapter is None:
             raise RuntimeError(f"No adapter found for channel: {message.channel}/{message.channel_instance}")
 
+        approval_command = self._build_feishu_approval_command(message)
+        if approval_command is not None:
+            message.metadata["command"] = approval_command
+
         renderer = self._resolve_feishu_card_renderer(message.channel_instance, runtime_app)
         source_message_id = message.metadata.get("source_message_id")
         placeholder_id: str | None = None
@@ -236,10 +243,11 @@ class GatewayServer:
             if not patch_due:
                 return
 
-            await adapter.update_card(
-                placeholder_id,
-                card,
-            )
+            last_patch_at = now
+            last_patch_status = status
+            last_patch_card = card
+
+            await adapter.update_card(placeholder_id, card)
             self._record_outbound_message(
                 runtime_app=runtime_app,
                 channel=message.channel,
@@ -254,9 +262,6 @@ class GatewayServer:
                 status=status or "updated",
                 payload={"message_type": "interactive", "source": "feishu_patch", "card": card},
             )
-            last_patch_at = now
-            last_patch_status = status
-            last_patch_card = card
 
         try:
             logger.info(
@@ -295,7 +300,7 @@ class GatewayServer:
                     f"event=feishu_ack_sent after_ms={elapsed_ms(started_at)} placeholder_id={placeholder_id}"
                 )
 
-            async for event in runtime_app.core.run_events(message):
+            async for event in self._run_core_events_with_approvals(runtime_app.core, message):
                 if isinstance(event, AssistantTextDeltaEvent):
                     final_text += event.delta
                     if not streaming_logged:
@@ -320,7 +325,7 @@ class GatewayServer:
                     )
                     await patch_placeholder(
                         final_text,
-                        status=f"🛠 正在处理：{event.tool_call_name}",
+                        status=f"🛠 正在处理：{TOOL_NAME_ZH.get(event.tool_call_name, event.tool_call_name)}",
                         force=True,
                     )
                 elif isinstance(event, ToolCallArgsEvent):
@@ -337,6 +342,13 @@ class GatewayServer:
                         event.tool_call_id,
                         {"tool_name": "", "input": None, "result": None},
                     )["result"] = event.content
+                elif isinstance(event, CustomEvent) and event.name == "on_interrupt":
+                    final_text = self._format_approval_prompt(event.value)
+                    await patch_placeholder(
+                        final_text,
+                        status="⏸ 等待确认",
+                        force=True,
+                    )
                 elif isinstance(event, RunErrorEvent):
                     raise RuntimeError(event.message)
                 elif isinstance(event, RunFinishedEvent):
@@ -653,6 +665,70 @@ class GatewayServer:
         except json.JSONDecodeError:
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    async def _run_core_events_with_approvals(self, core, message: NormalizedMessage):
+        try:
+            events = core.run_events(message, approval_store=self.pending_approvals)
+        except TypeError as exc:
+            if "approval_store" not in str(exc):
+                raise
+            events = core.run_events(message)
+
+        async for event in events:
+            yield event
+
+    def _build_feishu_approval_command(self, message: NormalizedMessage) -> dict | None:
+        text = (message.body or "").strip()
+        if not text:
+            return None
+
+        parts = text.split(maxsplit=1)
+        verb = parts[0].lower()
+        if verb in {"确认", "同意", "approve", "yes", "y"}:
+            approved = True
+        elif verb in {"拒绝", "否", "reject", "no", "n"}:
+            approved = False
+        else:
+            return None
+
+        approval_id = parts[1].strip() if len(parts) > 1 else ""
+        if not approval_id:
+            pending = (
+                self.pending_approvals.get_by_thread(message.thread_key)
+                or self.pending_approvals.get_by_thread(message.session_id)
+            )
+            if pending is None:
+                return None
+            approval_id = pending.approval_id
+
+        return {
+            "resume": {"approved": approved},
+            "interrupt_event": {"approval_id": approval_id},
+        }
+
+    def _format_approval_prompt(self, value: dict) -> str:
+        import json
+
+        approval_id = value.get("approval_id", "")
+        tool_name = value.get("tool_name", "")
+        args = value.get("args") or {}
+        command = args.get("command") if isinstance(args, dict) else None
+        timeout = args.get("timeout") if isinstance(args, dict) else None
+        detail = command or json.dumps(args, ensure_ascii=False)
+        lines = [
+            f"需要确认执行工具：{tool_name}",
+            f"内容：{detail}",
+        ]
+        if timeout is not None:
+            lines.append(f"超时：{timeout} 秒")
+        lines.extend(
+            [
+                "",
+                f"确认执行请回复：确认 {approval_id}",
+                f"拒绝执行请回复：拒绝 {approval_id}",
+            ]
+        )
+        return "\n".join(lines)
 
     def _serialize_tool_traces(self, tool_trace_by_id: dict[str, dict]) -> list[dict]:
         return [

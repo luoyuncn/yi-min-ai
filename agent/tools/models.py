@@ -17,3 +17,4 @@ class ToolDefinition:
     description: str
     schema: dict[str, Any]
     handler: Callable[..., str]
+    accepts_context: bool = False

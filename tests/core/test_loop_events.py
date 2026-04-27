@@ -7,6 +7,8 @@ from pathlib import Path
 from agent.core.loop import AgentCore
 from agent.core.provider import LLMResponse, LLMStreamChunk
 from agent.gateway.normalizer import NormalizedMessage
+from agent.scheduler.cron import CronScheduler
+from agent.tools.runtime_context import RuntimeServices
 from agent.web.runtime_state import PendingApprovalStore, RunControl
 
 
@@ -50,6 +52,29 @@ class ApprovalProviderManager:
         )()
 
 
+class ShellApprovalProviderManager:
+    """返回一个需要审批的 shell 工具调用。"""
+
+    async def call(self, request):
+        if any(message["role"] == "tool" for message in request.messages):
+            return type("Resp", (), {"type": "text", "text": "shell done", "tool_calls": None})()
+        return type(
+            "Resp",
+            (),
+            {
+                "type": "tool_calls",
+                "text": "准备执行命令",
+                "tool_calls": [
+                    {
+                        "id": "tool-shell-1",
+                        "name": "shell_exec",
+                        "input": {"command": "echo ok", "timeout": 30},
+                    }
+                ],
+            },
+        )()
+
+
 class SlowProviderManager:
     """用于验证 run interrupt 的慢响应 Provider。"""
 
@@ -71,6 +96,55 @@ class StreamingProviderManager:
             type="response",
             response=LLMResponse(type="text", text="你好"),
         )
+
+
+class CronListProviderManager:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, request):
+        self.calls += 1
+        if self.calls > 1:
+            raise AssertionError("cron_list_tasks should not require a second model call")
+        return type(
+            "Resp",
+            (),
+            {
+                "type": "tool_calls",
+                "text": "",
+                "tool_calls": [{"id": "tool-cron-list", "name": "cron_list_tasks", "input": {}}],
+            },
+        )()
+
+
+class ReminderPastProviderManager:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, request):
+        self.calls += 1
+        if self.calls > 1:
+            raise AssertionError("failed reminder_create should return a direct error response")
+        return type(
+            "Resp",
+            (),
+            {
+                "type": "tool_calls",
+                "text": "",
+                "tool_calls": [
+                    {
+                        "id": "tool-reminder-past",
+                        "name": "reminder_create",
+                        "input": {
+                            "title": "喝水提醒",
+                            "message": "该喝水了！",
+                            "run_at": "2026-04-27T13:10:00+08:00",
+                            "timezone": "Asia/Shanghai",
+                        },
+                    }
+                ],
+            },
+        )()
 
 
 def test_run_events_emits_tool_trace(tmp_path: Path) -> None:
@@ -102,6 +176,93 @@ def test_run_events_emits_tool_trace(tmp_path: Path) -> None:
     assert events[-1].kind == "run_finished"
 
 
+def test_cron_list_tool_result_returns_direct_response_without_second_model_call(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CronListProviderManager()
+    scheduler = CronScheduler(
+        config_path=workspace / "CRON.yaml",
+        workspace_dir=workspace,
+        agent_core=None,
+        gateway=None,
+    )
+    scheduler.create_or_update_task(
+        name="daily",
+        schedule="0 8 * * *",
+        timezone="UTC",
+        action={"type": "prompt", "prompt": "早报"},
+        output={},
+    )
+    core = AgentCore.build_for_test(
+        workspace,
+        provider,
+        runtime_services=RuntimeServices(cron_scheduler=scheduler),
+    )
+    message = NormalizedMessage(
+        message_id="1",
+        session_id="thread-cron",
+        sender="user",
+        body="调用 cron_list_tasks 看看",
+        attachments=[],
+        channel="feishu",
+        metadata={},
+    )
+
+    async def collect():
+        return [event async for event in core.run_events(message)]
+
+    events = asyncio.run(collect())
+
+    assert provider.calls == 1
+    assert events[-1].kind == "run_finished"
+    assert events[-1].result_text.startswith("你现在有 1 个定时任务")
+
+
+def test_failed_reminder_create_returns_direct_error_without_retry(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from agent.scheduler.reminder import ReminderScheduler
+
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = ReminderPastProviderManager()
+    scheduler = ReminderScheduler(
+        config_path=workspace / "REMINDERS.yaml",
+        workspace_dir=workspace,
+        agent_core=None,
+        gateway=None,
+        now_provider=lambda: datetime.fromisoformat("2026-04-27T14:30:00+08:00"),
+    )
+    core = AgentCore.build_for_test(
+        workspace,
+        provider,
+        runtime_services=RuntimeServices(reminder_scheduler=scheduler),
+    )
+    message = NormalizedMessage(
+        message_id="1",
+        session_id="thread-reminder",
+        sender="user",
+        body="设置一个5分钟后的提醒，让我喝水",
+        attachments=[],
+        channel="feishu",
+        metadata={},
+    )
+
+    async def collect():
+        return [event async for event in core.run_events(message)]
+
+    events = asyncio.run(collect())
+
+    assert provider.calls == 1
+    assert events[-1].kind == "run_finished"
+    assert events[-1].result_text.startswith("创建提醒失败")
+    assert scheduler.list_reminders() == []
+
+
 def test_run_events_emits_interrupt_for_approval_required_tool(tmp_path: Path) -> None:
     """命中审批工具时，应挂起 run 并发出 interrupt 自定义事件。"""
 
@@ -131,6 +292,37 @@ def test_run_events_emits_interrupt_for_approval_required_tool(tmp_path: Path) -
     assert not any(event.kind == "tool_call_args" for event in events)
     assert events[-1].kind == "run_finished"
     assert approvals.get_by_thread("thread-approval") is not None
+
+
+def test_run_events_emits_interrupt_for_shell_when_confirmation_is_required(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    core = AgentCore.build_for_test(
+        workspace,
+        ShellApprovalProviderManager(),
+        enable_shell=True,
+        shell_requires_confirmation=True,
+    )
+    approvals = PendingApprovalStore()
+    message = NormalizedMessage(
+        message_id="1",
+        session_id="thread-shell",
+        sender="user",
+        body="执行 echo ok",
+        attachments=[],
+        channel="web",
+        metadata={"run_id": "run-shell"},
+    )
+
+    async def collect():
+        return [event async for event in core.run_events(message, approval_store=approvals)]
+
+    events = asyncio.run(collect())
+
+    assert any(event.kind == "custom" and event.name == "on_interrupt" for event in events)
+    assert approvals.get_by_thread("thread-shell") is not None
 
 
 def test_run_events_can_resume_after_approval(tmp_path: Path) -> None:
