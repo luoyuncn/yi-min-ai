@@ -119,15 +119,17 @@ Linux 部署固定把运行态数据写在当前仓库目录里：
 
 ```text
 ./workspace
-./workspace-main
-./workspace-ops
 ```
 
-其中：
+默认生产形态是一个飞书机器人对应一个 Yi Min 主体，所有运行态数据都写入 `workspace/`。历史版本中的 `workspace-main/`、`workspace-ops/` 只作为迁移来源保留，不再是默认运行目录。
 
-- `workspace/` 用于基础日志、默认 workspace 文件和主进程锁文件
-- `workspace-main/` 对应 `feishu-main`
-- `workspace-ops/` 对应 `feishu-ops`
+如果你从旧的多机器人配置升级，建议先备份旧目录，再把有效记忆合并到新目录：
+
+```bash
+cp -a workspace-main workspace-main.backup.$(date +%Y%m%d%H%M%S) || true
+mkdir -p workspace
+cp workspace-main/MEMORY.md workspace/MEMORY.md
+```
 
 ## 5. 为什么这样更安全
 
@@ -191,4 +193,4 @@ loginctl enable-linger "$USER"
 - `sudo ./scripts/install_linux.sh` 会自动尝试把 `uv sync` 退回到原调用用户执行，避免把仓库和 `.venv` 改成 root 所有
 - `sudo ./scripts/install_linux.sh` 现在会显式透传常用的 `UV_*` 下载参数，便于镜像、证书和索引策略在 `sudo -u` 场景下继续生效
 - Linux service 不再依赖 `YIMIN_DATA_ROOT` 之类的路径环境变量，运行态目录固定在当前仓库下
-- 当前多 runtime 模式下，Heartbeat / Cron 仍会自动禁用，这是现阶段实现限制
+- 默认单主体模式下，Heartbeat / Cron 使用 `workspace/`；高级多 runtime 模式下仍会自动禁用 Heartbeat / Cron，这是现阶段实现限制

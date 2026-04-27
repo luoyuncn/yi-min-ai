@@ -1,5 +1,6 @@
 agent:
   name: "Yi Min"
+  workspace_dir: "../workspace"
   max_iterations: 8
 
 providers:
@@ -7,7 +8,7 @@ providers:
   default_primary: "qwen"
 
 mflow:
-  enabled: true
+  enabled: false
   dataset_name: "workspace"
   llm_provider_name: "qwen"
   embedding:
@@ -21,14 +22,8 @@ mflow:
 
 channels:
   instances:
-    - name: "feishu-main"
+    - name: "feishu"
       type: "feishu"
-      workspace_dir: "../workspace-main"
-      app_id_env: "FEISHU_MAIN_APP_ID"
-      app_secret_env: "FEISHU_MAIN_APP_SECRET"
-
-    - name: "feishu-ops"
-      type: "feishu"
-      workspace_dir: "../workspace-ops"
-      app_id_env: "FEISHU_MIN_APP_ID"
-      app_secret_env: "FEISHU_MIN_APP_SECRET"
+      workspace_dir: "../workspace"
+      app_id_env: "FEISHU_APP_ID"
+      app_secret_env: "FEISHU_APP_SECRET"

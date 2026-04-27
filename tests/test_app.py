@@ -359,6 +359,46 @@ def test_build_channel_apps_async_defaults_mflow_data_dir_per_workspace(tmp_path
     ]
 
 
+def test_build_app_does_not_initialize_mflow_when_disabled(tmp_path: Path, monkeypatch) -> None:
+    """默认禁用 M-flow 时，应用装配不应实例化 MflowBridge。"""
+
+    config_dir = tmp_path / "config"
+    workspace = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n"
+        "mflow:\n"
+        "  enabled: false\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    class FailingMflowBridge:
+        def __init__(self, *, data_dir, runtime_config):
+            raise AssertionError("MflowBridge should not be constructed when disabled")
+
+    monkeypatch.setattr(app_module, "MflowBridge", FailingMflowBridge)
+
+    app = build_app(config_path=config_dir / "agent.yaml", testing=True)
+
+    assert app.core.mflow_bridge is None
+
+
 def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path: Path) -> None:
     """新 workspace 应自动提供记账和自动笔记 skill 模板。"""
 

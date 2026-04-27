@@ -16,6 +16,7 @@ import click
 
 from agent.observability.logging import setup_logging
 from agent.runtime_paths import resolve_base_workspace
+from agent.config.loader import is_multi_runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +212,7 @@ async def _run_gateway(
     for runtime_id, app in apps.items():
         gateway.register_runtime_app(runtime_id, app)
 
-    multi_runtime_mode = bool(settings.channels and settings.channels.instances)
+    multi_runtime_mode = is_multi_runtime_settings(settings)
 
     # 3. 注册飞书通道
     if enable_feishu and not testing:
@@ -274,6 +275,7 @@ async def _run_gateway(
             agent_core=default_app.core,
             gateway=gateway,
             interval_minutes=heartbeat_interval,
+            channel_instance=_default_channel_instance(settings),
         )
         await heartbeat_scheduler.start()
         logger.info("✓ Heartbeat 调度器已启动")
@@ -287,6 +289,7 @@ async def _run_gateway(
             workspace_dir=workspace_dir,
             agent_core=default_app.core,
             gateway=gateway,
+            channel_instance=_default_channel_instance(settings),
         )
         await cron_scheduler.start()
         logger.info("✓ Cron 调度器已启动")
@@ -338,7 +341,7 @@ async def _run_all(
     for runtime_id, app in apps.items():
         gateway.register_runtime_app(runtime_id, app)
 
-    multi_runtime_mode = bool(settings.channels and settings.channels.instances)
+    multi_runtime_mode = is_multi_runtime_settings(settings)
 
     # 3. 注册飞书通道
     if enable_feishu and not testing:
@@ -394,6 +397,7 @@ async def _run_all(
             agent_core=app_instance.core,
             gateway=gateway,
             interval_minutes=heartbeat_interval,
+            channel_instance=_default_channel_instance(settings),
         )
         await heartbeat_scheduler.start()
         logger.info("✓ Heartbeat 调度器已启动")
@@ -404,6 +408,7 @@ async def _run_all(
             workspace_dir=workspace_dir,
             agent_core=app_instance.core,
             gateway=gateway,
+            channel_instance=_default_channel_instance(settings),
         )
         await cron_scheduler.start()
         logger.info("✓ Cron 调度器已启动")
@@ -449,6 +454,12 @@ async def _run_all(
             await cron_scheduler.stop()
         await gateway.stop()
         logger.info("✓ 所有服务已停止")
+
+
+def _default_channel_instance(settings) -> str:
+    if settings.channels and len(settings.channels.instances) == 1:
+        return settings.channels.instances[0].name
+    return "default"
 
 
 if __name__ == "__main__":

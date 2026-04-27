@@ -47,6 +47,7 @@ class CronScheduler:
         workspace_dir: Path,
         agent_core,
         gateway,
+        channel_instance: str = "default",
     ):
         """
         Args:
@@ -59,6 +60,7 @@ class CronScheduler:
         self.workspace_dir = Path(workspace_dir)
         self.agent_core = agent_core
         self.gateway = gateway
+        self.channel_instance = channel_instance
         self._tasks: list[CronTask] = []
         self._running = False
         self._task: asyncio.Task | None = None
@@ -214,7 +216,12 @@ class CronScheduler:
             sender="cron",
             body=f"[CRON TASK: {task.name}]\n{prompt}",
             channel="internal",
-            metadata={"type": "cron", "task_name": task.name},
+            channel_instance=self.channel_instance,
+            metadata={
+                "type": "cron",
+                "task_name": task.name,
+                "channel_instance": self.channel_instance,
+            },
             timestamp=datetime.now(self._pytz.UTC),
         )
 

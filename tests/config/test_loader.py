@@ -9,7 +9,56 @@ from pathlib import Path
 
 import pytest
 
-from agent.config.loader import ConfigError, load_settings
+from agent.config.loader import ConfigError, is_multi_runtime_settings, load_settings
+
+
+def test_default_agent_config_uses_single_workspace_subject() -> None:
+    """本地默认配置应该只描述一个 Yi Min 主体和一个 workspace。"""
+
+    settings = load_settings(Path("config/agent.yaml"))
+
+    assert settings.agent.workspace_dir == (Path("workspace").resolve())
+    assert settings.channels is None or len(settings.channels.instances) <= 1
+    if settings.channels is not None and settings.channels.instances:
+        instance = settings.channels.instances[0]
+        assert instance.name == "feishu"
+        assert instance.workspace_dir == Path("workspace").resolve()
+
+
+def test_default_linux_config_uses_one_feishu_channel() -> None:
+    """Linux 生产配置不应默认声明多个飞书机器人。"""
+
+    settings = load_settings(Path("config/agent.linux.yaml"))
+
+    assert settings.agent.workspace_dir == Path("workspace").resolve()
+    assert settings.channels is not None
+    assert len(settings.channels.instances) == 1
+    instance = settings.channels.instances[0]
+    assert instance.name == "feishu"
+    assert instance.channel_type == "feishu"
+    assert instance.workspace_dir == Path("workspace").resolve()
+    assert instance.app_id_env == "FEISHU_APP_ID"
+    assert instance.app_secret_env == "FEISHU_APP_SECRET"
+
+
+def test_single_channel_instance_is_not_multi_runtime() -> None:
+    """配置一个飞书实例只是单主体生产形态，不应禁用主动调度。"""
+
+    settings = load_settings(Path("config/agent.linux.yaml"))
+
+    assert is_multi_runtime_settings(settings) is False
+
+
+def test_default_configs_disable_mflow_by_default() -> None:
+    """M-flow 太重，默认配置不应把它接进主链路。"""
+
+    local_settings = load_settings(Path("config/agent.yaml"))
+    linux_settings = load_settings(Path("config/agent.linux.yaml"))
+
+    assert local_settings.mflow is not None
+    assert local_settings.mflow.enabled is False
+    assert linux_settings.mflow is not None
+    assert linux_settings.mflow.enabled is False
 
 
 def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -> None:

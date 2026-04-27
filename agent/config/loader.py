@@ -91,6 +91,12 @@ def load_settings(agent_config_path: Path) -> Settings:
     )
 
 
+def is_multi_runtime_settings(settings: Settings) -> bool:
+    """Return True only when config declares more than one runtime instance."""
+
+    return bool(settings.channels and len(settings.channels.instances) > 1)
+
+
 def _read_yaml(path: Path) -> dict:
     """读取单个 YAML 文件，并把底层异常包装成 ConfigError。"""
 
