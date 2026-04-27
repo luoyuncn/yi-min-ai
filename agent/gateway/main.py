@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from agent.app import build_channel_apps_async
+from agent.config.loader import is_multi_runtime_settings
 from agent.gateway.instance_lock import InstanceLockError, acquire_instance_lock
 from agent.gateway.server import GatewayServer
 from agent.observability.logging import setup_logging
@@ -135,7 +136,7 @@ async def run_server(
         for runtime_id, app in apps.items():
             gateway.register_runtime_app(runtime_id, app)
 
-        multi_runtime_mode = bool(settings.channels and settings.channels.instances)
+        multi_runtime_mode = is_multi_runtime_settings(settings)
 
         # 4. 注册飞书通道
         if enable_feishu:
@@ -199,6 +200,7 @@ async def run_server(
                 agent_core=default_app.core,
                 gateway=gateway,
                 interval_minutes=heartbeat_interval,
+                channel_instance=_default_channel_instance(settings),
             )
             await heartbeat_scheduler.start()
             logger.info("✓ Heartbeat 调度器已启动")
@@ -211,6 +213,7 @@ async def run_server(
                 workspace_dir=workspace_dir,
                 agent_core=default_app.core,
                 gateway=gateway,
+                channel_instance=_default_channel_instance(settings),
             )
             await cron_scheduler.start()
             logger.info("✓ Cron 调度器已启动")
@@ -240,6 +243,12 @@ async def run_server(
             logger.info("✓ Gateway 服务器已停止")
 
         lock_handle.release()
+
+
+def _default_channel_instance(settings) -> str:
+    if settings.channels and len(settings.channels.instances) == 1:
+        return settings.channels.instances[0].name
+    return "default"
 
 
 if __name__ == "__main__":

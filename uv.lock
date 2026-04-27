@@ -2869,13 +2869,17 @@ dependencies = [
     { name = "fastapi" },
     { name = "lancedb" },
     { name = "lark-oapi" },
-    { name = "mflow-ai" },
     { name = "openai" },
     { name = "python-dotenv" },
     { name = "pytz" },
     { name = "pyyaml" },
     { name = "tiktoken" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+mflow = [
+    { name = "mflow-ai" },
 ]
 
 [package.dev-dependencies]
@@ -2894,7 +2898,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "lancedb", specifier = ">=0.15.0" },
     { name = "lark-oapi", specifier = ">=1.5.5" },
-    { name = "mflow-ai", specifier = ">=0.3.6" },
+    { name = "mflow-ai", marker = "extra == 'mflow'", specifier = ">=0.3.6" },
     { name = "openai", specifier = ">=1.30.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pytz", specifier = ">=2024.1" },
@@ -2902,6 +2906,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.7.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]
+provides-extras = ["mflow"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -16,7 +16,6 @@ dependencies = [
   "fastapi>=0.115.0",
   "lark-oapi>=1.5.5",
   "lancedb>=0.15.0",
-  "mflow-ai>=0.3.6",
   "openai>=1.30.0",
   "croniter>=2.0.0",
   "python-dotenv>=1.0.1",
@@ -24,6 +23,11 @@ dependencies = [
   "pytz>=2024.1",
   "tiktoken>=0.7.0",
   "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+mflow = [
+  "mflow-ai>=0.3.6",
 ]
 
 [project.scripts]

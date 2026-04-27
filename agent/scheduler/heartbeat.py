@@ -27,6 +27,7 @@ class HeartbeatScheduler:
         agent_core,
         gateway,
         interval_minutes: int = 30,
+        channel_instance: str = "default",
     ):
         """
         Args:
@@ -39,6 +40,7 @@ class HeartbeatScheduler:
         self.agent_core = agent_core
         self.gateway = gateway
         self.interval = interval_minutes * 60
+        self.channel_instance = channel_instance
         self.heartbeat_file = self.workspace_dir / "HEARTBEAT.md"
         self._running = False
         self._task: asyncio.Task | None = None
@@ -93,7 +95,7 @@ class HeartbeatScheduler:
         internal_message = NormalizedMessage(
             message_id=f"heartbeat-{uuid4()}",
             session_id="__heartbeat__",
-            sender="system",
+            sender="heartbeat",
             body=(
                 f"[HEARTBEAT] Current time: {datetime.now(UTC).isoformat()}\n\n"
                 f"Review the following task list and take action on anything "
@@ -102,7 +104,8 @@ class HeartbeatScheduler:
                 f"{heartbeat_content}"
             ),
             channel="internal",
-            metadata={"type": "heartbeat"},
+            channel_instance=self.channel_instance,
+            metadata={"type": "heartbeat", "channel_instance": self.channel_instance},
             timestamp=datetime.now(UTC),
         )
 

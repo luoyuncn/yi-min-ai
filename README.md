@@ -1,11 +1,11 @@
 # yi-min-ai
 
-Yi Min AI Assistant，当前已经是一套可运行的本地 / 飞书多通道 Agent 工程，不再只是阶段性骨架。
+Yi Min AI Assistant，当前已经是一套可运行的本地 / 飞书 Agent 工程，不再只是阶段性骨架。
 
 ## 当前能力
 
 - 统一入口：CLI、Web、Gateway、All 模式
-- 多飞书实例接入与独立 workspace 隔离
+- 单飞书生产渠道，对应一个清晰的 Yi Min 主体和一个 workspace
 - Always-on Memory：`SOUL.md` / `MEMORY.md`
 - 统一 `agent.db` 会话归档、长期笔记、记账数据
 - M-flow 深度记忆接入
@@ -45,7 +45,7 @@ uv sync
 cp .env.example .env
 ```
 
-然后按你的 provider / 飞书实例填入密钥。
+然后按你的 provider / 飞书机器人填入密钥。
 
 本地最小验证：
 
@@ -78,9 +78,9 @@ uv run pytest -v
 ## 配置文件
 
 - `config/agent.yaml`
-  用于本地开发，工作空间由 `channels.instances[*].workspace_dir` 决定。
+  用于本地开发，默认工作空间为 `workspace/`。
 - `config/agent.linux.yaml`
-  用于 Linux 常驻部署，运行数据固定写到当前仓库里的 instance workspace 目录。
+  用于 Linux 常驻部署，默认接入一个飞书机器人，运行数据固定写到当前仓库里的 `workspace/`。
 - `config/providers.yaml`
   管理 provider 列表、模型名、`api_key_env`、`base_url` 等。
 
@@ -115,16 +115,17 @@ mflow:
 
 运行态数据现在按下面的原则处理：
 
-- `workspace-main/`、`workspace-ops/` 不进入 Git
+- `workspace/` 不进入 Git
 - 本地数据库、日志、M-flow 数据、运行期 skill 都不会上传到远端
-- Linux 部署和本地开发都把运行态文件固定在当前仓库目录里的各 instance workspace 下
+- Linux 部署和本地开发都把运行态文件固定在当前仓库目录里的 `workspace/` 下
 
 如果你在 Linux 上用 `config/agent.linux.yaml`，默认会使用这些项目内目录：
 
 ```text
-./workspace-main
-./workspace-ops
+./workspace
 ```
+
+历史上的 `workspace-main/`、`workspace-ops/` 只作为迁移来源保留，不再是默认运行目录。需要迁移时，优先把 `workspace-main/MEMORY.md` 和 `workspace-main/agent.db` 中的有效数据合并到 `workspace/`。
 
 ## Linux 一键部署
 
@@ -161,7 +162,7 @@ yimin logs
 - 普通用户执行时：安装 `systemd --user` 服务到 `~/.config/systemd/user/yimin.service`
 - `sudo ./scripts/install_linux.sh` 时：安装 system 级服务到 `/etc/systemd/system/yimin.service`
 - 启动命令都使用 `config/agent.linux.yaml`
-- 运行态数据固定写到仓库内各实例自己的 `workspace-main/`、`workspace-ops/`
+- 运行态数据固定写到仓库内的 `workspace/`
 
 如果你使用的是用户态 service，并且希望退出登录后继续运行，执行一次：
 
@@ -191,7 +192,7 @@ sudo yimin restart
 
 ## 说明
 
-- 多 runtime 配置下，Heartbeat / Cron 当前仍会自动禁用，这一点是现有实现约束
+- 默认单主体配置下，Heartbeat / Cron 可以使用同一个 `workspace/` 上下文；高级多 runtime 配置仍会自动禁用 Heartbeat / Cron
 - `agent.main` / `agent.gateway.main` 现在都会按配置解析 workspace，不再硬编码 `workspace/`
 - shell 脚本通过 `.gitattributes` 固定为 LF，避免 Linux 执行报错
 

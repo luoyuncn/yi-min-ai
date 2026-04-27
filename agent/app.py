@@ -18,7 +18,7 @@ from agent.core.llm_factory import LLMFactory
 from agent.core.provider import LLMResponse
 from agent.core.provider_manager import ProviderManager
 from agent.gateway.normalizer import NormalizedMessage
-from agent.memory import AlwaysOnMemory, LedgerStore, NoteStore, SessionArchive
+from agent.memory import AlwaysOnMemory, LedgerStore, MemoryExtractor, MemoryStore, NoteStore, SessionArchive
 from agent.memory.mflow_bridge import (
     MflowBridge,
     MflowEmbeddingConfig,
@@ -240,6 +240,8 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         skill_loader=SkillLoader(workspace_dir / "skills"),
         ledger_store=LedgerStore(db_path),
         note_store=NoteStore(db_path),
+        memory_store=MemoryStore(db_path),
+        memory_extractor=MemoryExtractor(),
         mflow_bridge=mflow_bridge,
         max_iterations=settings.agent.max_iterations,
         system_prompt=_build_system_prompt(settings.agent.name),
