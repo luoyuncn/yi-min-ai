@@ -492,7 +492,7 @@ def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> No
     assert "Use ledger tools for bookkeeping requests" in prompt
     assert "Ask follow-up questions before committing incomplete ledger entries" in prompt
     assert "Use note tools for long-lived user facts" in prompt
-    assert "Do not store bookkeeping or note facts in MEMORY.md" in prompt
+    assert "Do not store bookkeeping or note facts in PROFILE.md" in prompt
     assert "When the user asks who they are, what their name is" in prompt
     assert "When asked about your available tools or skills" in prompt
 

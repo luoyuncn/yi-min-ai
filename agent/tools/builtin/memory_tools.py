@@ -4,12 +4,18 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 
-def memory_write(always_on_memory, content: str) -> str:
-    """替换 MEMORY.md 的内容。"""
+def profile_write(always_on_memory, content: str) -> str:
+    """替换 PROFILE.md 的内容。"""
 
     _require_dependency(always_on_memory, "AlwaysOnMemory")
-    always_on_memory.replace_memory(content)
+    always_on_memory.replace_profile(content)
     return "ok"
+
+
+def memory_write(always_on_memory, content: str) -> str:
+    """兼容旧名称：替换 PROFILE.md 的内容。"""
+
+    return profile_write(always_on_memory, content)
 
 
 def memory_search(memory_store, query: str, limit: int = 5) -> str:

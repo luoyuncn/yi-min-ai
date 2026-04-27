@@ -20,6 +20,8 @@ def test_context_assembler_includes_system_memory_skills_history_and_user_messag
     )
 
     assert context[0]["role"] == "system"
+    assert "[PROFILE.md]" in context[0]["content"]
+    assert "[MEMORY.md]" not in context[0]["content"]
     assert "prefers python" in context[0]["content"]
     assert "Available Tools:" in context[0]["content"]
     assert context[-1]["role"] == "user"

@@ -276,7 +276,11 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
     core = AgentCore(
         workspace_dir=workspace_dir,
         provider_manager=provider_manager,
-        always_on_memory=AlwaysOnMemory(workspace_dir / "SOUL.md", workspace_dir / "MEMORY.md"),
+        always_on_memory=AlwaysOnMemory(
+            workspace_dir / "SOUL.md",
+            workspace_dir / "PROFILE.md",
+            legacy_memory_file=workspace_dir / "MEMORY.md",
+        ),
         session_archive=session_archive,
         session_manager=SessionManager(db_path, archive=session_archive),
         skill_loader=SkillLoader(workspace_dir / "skills"),
@@ -334,11 +338,15 @@ async def _build_provider_manager_async(settings, **llm_overrides) -> ProviderMa
 
 
 def _ensure_workspace_files(workspace_dir: Path) -> None:
-    """确保工作区里至少有基础人格和记忆文件。"""
+    """确保工作区里至少有基础人格和用户档案文件。"""
 
     defaults = {
         "SOUL.md": DEFAULT_SOUL_TEMPLATE,
-        "MEMORY.md": "# User Profile\n",
+        "PROFILE.md": (
+            (workspace_dir / "MEMORY.md").read_text(encoding="utf-8")
+            if (workspace_dir / "MEMORY.md").exists()
+            else "# User Profile\n"
+        ),
         "HEARTBEAT.md": (
             "# Heartbeat Tasks\n"
             "\n"
@@ -377,7 +385,7 @@ def _ensure_default_skills(skills_dir: Path) -> None:
             "- Only call `ledger_commit_draft` after required fields are complete.\n"
             "- Use `ledger_query_entries` and `ledger_summary` for reporting.\n"
             "- Do not commit guessed values. Clarify ambiguity first.\n"
-            "- Prefer ledger tools over `memory_write` or arbitrary files for bookkeeping facts.\n"
+            "- Prefer ledger tools over `profile_write` or arbitrary files for bookkeeping facts.\n"
             "- Example triggers: `今天午饭 32`, `帮我记一笔报销 120`, `这个月餐饮花了多少`.\n"
         ),
         "note-taking": (
@@ -393,7 +401,7 @@ def _ensure_default_skills(skills_dir: Path) -> None:
             "- Give a short acknowledgement for explicit saves and important long-lived notes.\n"
             "- Search existing notes before creating a new one.\n"
             "- Do not auto-save one-off small talk, temporary emotions, or weak guesses.\n"
-            "- Prefer note tools over `memory_write` when saving long-lived user facts.\n"
+            "- Prefer note tools over `profile_write` when saving long-lived user facts.\n"
             "- Example durable facts: `我乳糖不耐受`, `以后默认中文回答`, `我更喜欢美式`, `六月计划去日本`.\n"
         ),
     }
@@ -436,8 +444,8 @@ def _build_system_prompt(agent_name: str) -> str:
             "For successful reminder or cron task creation, keep the final user-visible reply short and do not explain internal scheduling reasoning unless asked.",
             "Always save explicit note-taking requests as notes, but do not use notes to silently rewrite identity, personality, or user profile.",
             "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
-            "Do not store bookkeeping or note facts in MEMORY.md or arbitrary files unless the user explicitly asks for that format.",
-            "Treat explicit facts in MEMORY.md and active memory items as established context unless the user corrects them.",
+            "Do not store bookkeeping or note facts in PROFILE.md or arbitrary files unless the user explicitly asks for that format.",
+            "Treat explicit facts in PROFILE.md and active memory items as established context unless the user corrects them.",
             (
                 "When the user asks who they are, what their name is, or how you should address them, "
                 "answer directly from explicit memory instead of asking for reconfirmation unless the stored facts conflict."

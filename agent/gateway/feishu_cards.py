@@ -15,7 +15,7 @@ TOOL_NAME_ZH: dict[str, str] = {
     "ledger_commit_draft": "提交账目",
     "ledger_query_entries": "查询账目",
     "ledger_summary": "账目汇总",
-    "memory_write": "更新记忆",
+    "profile_write": "更新档案",
     "memory_search": "搜索记忆",
     "memory_list_recent": "最近记忆",
     "memory_forget": "遗忘记忆",

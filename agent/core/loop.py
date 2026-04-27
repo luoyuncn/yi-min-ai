@@ -175,7 +175,7 @@ class AgentCore:
             selected_history = self._select_history_for_context(session.history)
             context = self.context_assembler.assemble(
                 soul_text=self.always_on_memory.load_soul(),
-                memory_text=self.always_on_memory.load_memory(),
+                memory_text=self.always_on_memory.load_profile(),
                 memory_items_text=self._build_memory_items_text(message.body),
                 tool_index=self.tool_registry.get_index(),
                 skill_index=self.skill_loader.get_index(),
@@ -910,7 +910,7 @@ class AgentCore:
             runtime_control.ensure_active()
 
     def _requires_approval(self, tool_name: str) -> bool:
-        if tool_name in {"file_write", "memory_write"}:
+        if tool_name in {"file_write", "profile_write"}:
             return True
         return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
 
@@ -989,7 +989,7 @@ class AgentCore:
                 source_sender_id=candidate.source_sender_id,
             )
             self.react_logger.record(
-                "memory_write",
+                "profile_write",
                 thread_id=thread_id,
                 source_message_id=source_message_id,
                 memory_id=memory_id,
@@ -1073,7 +1073,11 @@ class AgentCore:
         return cls(
             workspace_dir=workspace,
             provider_manager=provider_manager,
-            always_on_memory=AlwaysOnMemory(workspace / "SOUL.md", workspace / "MEMORY.md"),
+            always_on_memory=AlwaysOnMemory(
+                workspace / "SOUL.md",
+                workspace / "PROFILE.md",
+                legacy_memory_file=workspace / "MEMORY.md",
+            ),
             session_archive=SessionArchive(workspace / "agent.db"),
             session_manager=SessionManager(workspace / "agent.db"),
             skill_loader=SkillLoader(workspace / "skills"),

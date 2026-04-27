@@ -22,7 +22,7 @@ from agent.tools.builtin.ledger_tools import (
     ledger_summary,
     ledger_upsert_draft,
 )
-from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, memory_write, recall_memory
+from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, profile_write, recall_memory
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.reminder_tools import reminder_create, reminder_delete, reminder_list
 from agent.tools.builtin.session_tools import read_skill, search_sessions
@@ -84,7 +84,7 @@ def build_stage1_registry(
 
     基础工具：
     - 文件读写
-    - MEMORY 写入
+    - PROFILE 写入
     - 会话检索
     - 技能全文读取
     - M-flow 深度检索（如果可用）
@@ -201,10 +201,10 @@ def build_stage1_registry(
     )
     registry.register(
         ToolDefinition(
-            name="memory_write",
-            description="Replace MEMORY.md content for the next turn.",
-            schema=_schema("memory_write", "Replace MEMORY.md", {"content": _string_field("Memory content")}),
-            handler=partial(memory_write, always_on_memory),
+            name="profile_write",
+            description="Replace PROFILE.md content for the next turn.",
+            schema=_schema("profile_write", "Replace PROFILE.md", {"content": _string_field("Profile content")}),
+            handler=partial(profile_write, always_on_memory),
         )
     )
     registry.register(

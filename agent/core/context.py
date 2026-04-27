@@ -115,7 +115,7 @@ class ContextAssembler:
                 human_block,
                 "[SOUL.md]",
                 soul_text,
-                "[MEMORY.md]",
+                "[PROFILE.md]",
                 memory_text,
                 memory_items_block,
                 reminder_policy_block,

@@ -21,7 +21,7 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
         "ledger_query_entries",
         "ledger_summary",
         "ledger_upsert_draft",
-        "memory_write",
+        "profile_write",
         "memory_search",
         "memory_list_recent",
         "memory_forget",
