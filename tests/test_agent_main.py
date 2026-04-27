@@ -2,7 +2,7 @@
 
 from click.testing import CliRunner
 
-from agent.app import _build_system_prompt
+from agent.app import _build_system_prompt, _ensure_workspace_files
 import agent.main as main_module
 
 
@@ -34,3 +34,13 @@ def test_system_prompt_routes_fresh_facts_to_web_search() -> None:
     assert "web_search" in prompt
     assert "current news" in prompt
     assert "Do not invent" in prompt
+
+
+def test_workspace_init_uses_default_soul_template(tmp_path) -> None:
+    _ensure_workspace_files(tmp_path)
+
+    soul_text = (tmp_path / "SOUL.md").read_text(encoding="utf-8")
+
+    assert "你是银月，本名玲珑" in soul_text
+    assert "银月狼族圣女" in soul_text
+    assert "不在没有把握时假装什么都知道" in soul_text
