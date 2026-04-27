@@ -15,6 +15,7 @@ dependencies = [
   "ddgs>=9.0.0",
   "fastapi>=0.115.0",
   "lark-oapi>=1.5.5",
+  "langfuse>=4.0.0",
   "lancedb>=0.15.0",
   "openai>=1.30.0",
   "croniter>=2.0.0",

@@ -112,6 +112,30 @@ class ToolSettings:
 
 
 @dataclass(slots=True)
+class LangfuseSettings:
+    """Langfuse tracing settings."""
+
+    enabled: bool = True
+    public_key_env: str = "LANGFUSE_PUBLIC_KEY"
+    secret_key_env: str = "LANGFUSE_SECRET_KEY"
+    base_url: str = "http://192.169.26.221:3000"
+    capture_inputs: bool = True
+    capture_outputs: bool = True
+    capture_tool_args: bool = True
+    capture_tool_results: bool = True
+    capture_reasoning: str = "metadata"
+    max_field_chars: int = 12000
+    sample_rate: float = 1.0
+
+
+@dataclass(slots=True)
+class ObservabilitySettings:
+    """Observability integrations."""
+
+    langfuse: LangfuseSettings
+
+
+@dataclass(slots=True)
 class Settings:
     """运行时顶层配置对象。
 
@@ -125,3 +149,4 @@ class Settings:
     channels: ChannelSettings | None = None
     mflow: MflowSettings | None = None
     tools: ToolSettings | None = None
+    observability: ObservabilitySettings | None = None

@@ -16,8 +16,10 @@ from agent.config.models import (
     AgentSettings,
     ChannelInstanceSettings,
     ChannelSettings,
+    LangfuseSettings,
     MflowEmbeddingSettings,
     MflowSettings,
+    ObservabilitySettings,
     ProviderConfigItem,
     ProviderSettings,
     Settings,
@@ -91,6 +93,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             provider_names=provider_names,
         ),
         tools=_build_tool_settings(_optional_mapping(raw, "tools")),
+        observability=_build_observability_settings(_optional_mapping(raw, "observability")),
     )
 
 
@@ -383,4 +386,42 @@ def _build_tool_settings(data: dict | None) -> ToolSettings:
             enabled=False if enabled is None else enabled,
             requires_confirmation=True if requires_confirmation is None else requires_confirmation,
         )
+    )
+
+
+def _build_observability_settings(data: dict | None) -> ObservabilitySettings:
+    langfuse_data = _optional_mapping(data, "langfuse") if data is not None else None
+    return ObservabilitySettings(langfuse=_build_langfuse_settings(langfuse_data))
+
+
+def _optional_bool_with_default(data: dict, key: str, default: bool) -> bool:
+    value = _optional_bool(data, key)
+    return default if value is None else value
+
+
+def _optional_float_with_default(data: dict, key: str, default: float) -> float:
+    value = _optional_float(data, key)
+    return default if value is None else value
+
+
+def _build_langfuse_settings(data: dict | None) -> LangfuseSettings:
+    if data is None:
+        return LangfuseSettings()
+
+    capture_reasoning = _optional_str(data, "capture_reasoning") or "metadata"
+    if capture_reasoning not in {"off", "metadata", "full"}:
+        raise ConfigError("observability.langfuse.capture_reasoning must be one of: off, metadata, full")
+
+    return LangfuseSettings(
+        enabled=_optional_bool_with_default(data, "enabled", True),
+        public_key_env=_optional_str(data, "public_key_env") or "LANGFUSE_PUBLIC_KEY",
+        secret_key_env=_optional_str(data, "secret_key_env") or "LANGFUSE_SECRET_KEY",
+        base_url=_optional_str(data, "base_url") or "http://192.169.26.221:3000",
+        capture_inputs=_optional_bool_with_default(data, "capture_inputs", True),
+        capture_outputs=_optional_bool_with_default(data, "capture_outputs", True),
+        capture_tool_args=_optional_bool_with_default(data, "capture_tool_args", True),
+        capture_tool_results=_optional_bool_with_default(data, "capture_tool_results", True),
+        capture_reasoning=capture_reasoning,
+        max_field_chars=_optional_int(data, "max_field_chars") or 12000,
+        sample_rate=_optional_float_with_default(data, "sample_rate", 1.0),
     )

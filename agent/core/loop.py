@@ -20,6 +20,7 @@ from agent.core.context import ContextAssembler
 from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk
 from agent.memory import AlwaysOnMemory, LedgerStore, MemoryExtractor, MemoryStore, NoteStore, SessionArchive, TurnData
 from agent.observability.react_log import ReactTraceLogger
+from agent.observability.langfuse_tracer import NoopObservation
 from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_now, text_preview, trace_fields
 from agent.session import SessionManager
 from agent.skills import SkillLoader
@@ -62,6 +63,7 @@ class AgentCore:
         memory_store: MemoryStore | None = None,
         memory_extractor: MemoryExtractor | None = None,
         react_logger: ReactTraceLogger | None = None,
+        trace_client=None,
         mflow_bridge=None,
         runtime_services: RuntimeServices | None = None,
         enable_shell: bool = False,
@@ -88,6 +90,7 @@ class AgentCore:
         self.memory_store = memory_store
         self.memory_extractor = memory_extractor
         self.react_logger = react_logger or ReactTraceLogger(self.workspace_dir / "logs" / "react.log")
+        self.trace_client = trace_client
         self.context_assembler = ContextAssembler(system_prompt=system_prompt)
         self.compaction_engine = CompactionEngine(
             provider_manager=provider_manager,
@@ -149,6 +152,21 @@ class AgentCore:
         )
         yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
 
+        trace_cm = self._trace_start_trace(
+            "agent.run",
+            input=message.body,
+            metadata={
+                "run_id": run_id,
+                "trace_id": metadata.get("trace_id"),
+                "thread_id": thread_id,
+                "session_id": message.session_id,
+                "channel": message.channel,
+                "channel_instance": message.channel_instance,
+                "sender": message.sender,
+                "body_chars": len(message.body),
+            },
+        )
+        trace_observation = trace_cm.__enter__()
         try:
             session = await self.session_manager.get_or_create(thread_id, channel=message.channel)
             logger.info(
@@ -173,20 +191,33 @@ class AgentCore:
                     yield event
                 return
 
-            selected_history = self._select_history_for_context(session.history, user_message=message.body)
-            context = self.context_assembler.assemble(
-                soul_text=self.always_on_memory.load_soul(),
-                memory_text=self.always_on_memory.load_profile(),
-                memory_items_text=self._build_memory_items_text(message.body),
-                tool_index=self.tool_registry.get_index(),
-                skill_index=self.skill_loader.get_index(),
-                history=selected_history,
-                user_message=message.body,
-                channel=message.channel,
-                channel_instance=message.channel_instance,
-                sender=message.sender,
-                metadata=message.metadata,
-            )
+            with self._trace_start_span(
+                "context.assemble",
+                input={"user_message": message.body, "history_messages": len(session.history)},
+                metadata={"run_id": run_id, "trace_id": metadata.get("trace_id")},
+            ) as context_span:
+                selected_history = self._select_history_for_context(session.history, user_message=message.body)
+                context = self.context_assembler.assemble(
+                    soul_text=self.always_on_memory.load_soul(),
+                    memory_text=self.always_on_memory.load_profile(),
+                    memory_items_text=self._build_memory_items_text(message.body),
+                    tool_index=self.tool_registry.get_index(),
+                    skill_index=self.skill_loader.get_index(),
+                    history=selected_history,
+                    user_message=message.body,
+                    channel=message.channel,
+                    channel_instance=message.channel_instance,
+                    sender=message.sender,
+                    metadata=message.metadata,
+                )
+                context_span.update(
+                    output={
+                        "context_messages": len(context),
+                        "history_messages_used": len(selected_history),
+                        "context_tokens": self.context_assembler.count_context_tokens(context),
+                        "tool_count": len(self.tool_registry.get_schemas()),
+                    }
+                )
             logger.info(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
                 f"event=context_assembled context_messages={len(context)} "
@@ -214,15 +245,33 @@ class AgentCore:
                 source_message_id=message.message_id,
                 sender_id=message.sender,
             ):
+                if isinstance(event, RunFinishedEvent):
+                    trace_observation.update(
+                        output=event.result_text,
+                        metadata={
+                            "run_id": run_id,
+                            "trace_id": metadata.get("trace_id"),
+                            "total_ms": elapsed_ms(run_started_at),
+                            "iterations": metadata.get("timing_iterations", 0),
+                            "model_total_ms": metadata.get("timing_model_ms_total", 0),
+                            "tool_exec_ms_total": metadata.get("timing_tool_exec_ms_total", 0),
+                            "tool_roundtrip_ms_total": metadata.get("timing_tool_roundtrip_ms_total", 0),
+                            "tool_call_count": metadata.get("timing_tool_call_count", 0),
+                        },
+                    )
                 yield event
         except Exception as exc:
             code = "RunInterrupted" if isinstance(exc, RunInterrupted) else type(exc).__name__
+            trace_observation.update(level="ERROR", status_message=str(exc), metadata={"code": code})
             logger.error(
                 f"{trace_fields(metadata, session_id=thread_id, channel=message.channel, run_id=run_id)} "
                 f"event=run_failed total_ms={elapsed_ms(run_started_at)} code={code} error={exc}",
                 exc_info=True,
             )
             yield RunErrorEvent(message=str(exc), code=code)
+        finally:
+            trace_cm.__exit__(None, None, None)
+            self._trace_flush()
 
     def run_sync(self, message) -> str:
         """给同步调用方（例如 CLI）提供一个方便入口。"""
@@ -288,35 +337,55 @@ class AgentCore:
                 tool_count=len(request.tools),
             )
 
-            async for chunk in self._iter_provider_stream(request):
-                self._ensure_active(runtime_control)
+            generation_cm = self._trace_start_generation(
+                "llm.chat",
+                input=request.messages,
+                metadata={
+                    "run_id": run_id,
+                    "trace_id": message_metadata.get("trace_id"),
+                    "thread_id": thread_id,
+                    "step_name": step_name,
+                    "context_messages": len(context),
+                    "tool_count": len(request.tools),
+                },
+            )
+            generation_observation = generation_cm.__enter__()
+            try:
+                async for chunk in self._iter_provider_stream(request):
+                    self._ensure_active(runtime_control)
 
-                if chunk.type == "text_delta":
-                    delta = chunk.delta or ""
-                    if not delta:
-                        continue
-                    if not emitted_stream_start:
-                        emitted_stream_start = True
-                        first_token_model_ms = elapsed_ms(model_started_at)
-                        if message_metadata.get("timing_first_token_model_ms") is None:
-                            message_metadata["timing_first_token_model_ms"] = first_token_model_ms
-                        if message_metadata.get("timing_first_token_run_ms") is None:
-                            message_metadata["timing_first_token_run_ms"] = elapsed_ms(
-                                message_metadata.get("run_started_at")
+                    if chunk.type == "text_delta":
+                        delta = chunk.delta or ""
+                        if not delta:
+                            continue
+                        if not emitted_stream_start:
+                            emitted_stream_start = True
+                            first_token_model_ms = elapsed_ms(model_started_at)
+                            if message_metadata.get("timing_first_token_model_ms") is None:
+                                message_metadata["timing_first_token_model_ms"] = first_token_model_ms
+                            if message_metadata.get("timing_first_token_run_ms") is None:
+                                message_metadata["timing_first_token_run_ms"] = elapsed_ms(
+                                    message_metadata.get("run_started_at")
+                                )
+                            logger.info(
+                                f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
+                                f"event=model_first_token step_name={step_name} after_ms={first_token_model_ms}"
                             )
-                        logger.info(
-                            f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
-                            f"event=model_first_token step_name={step_name} after_ms={first_token_model_ms}"
-                        )
-                        yield AssistantTextStartEvent(message_id=assistant_message_id)
-                    streamed_text_parts.append(delta)
-                    yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=delta)
-                    continue
+                            yield AssistantTextStartEvent(message_id=assistant_message_id)
+                        streamed_text_parts.append(delta)
+                        yield AssistantTextDeltaEvent(message_id=assistant_message_id, delta=delta)
+                        continue
 
-                if chunk.type == "response" and chunk.response is not None:
-                    response = chunk.response
+                    if chunk.type == "response" and chunk.response is not None:
+                        response = chunk.response
+            except Exception as exc:
+                generation_observation.update(level="ERROR", status_message=str(exc))
+                generation_cm.__exit__(type(exc), exc, exc.__traceback__)
+                raise
 
             if response is None:
+                generation_observation.update(level="ERROR", status_message="Provider stream ended without a final response")
+                generation_cm.__exit__(None, None, None)
                 raise RuntimeError("Provider stream ended without a final response")
 
             streamed_text = "".join(streamed_text_parts)
@@ -327,6 +396,24 @@ class AgentCore:
             model_ms = elapsed_ms(model_started_at)
             message_metadata["timing_model_ms_total"] += model_ms
             usage = response.usage or {}
+            generation_observation.update(
+                output={"text": response.text or "", "tool_calls": response.tool_calls or []},
+                metadata={
+                    **(response.metadata or {}),
+                    "run_id": run_id,
+                    "trace_id": message_metadata.get("trace_id"),
+                    "step_name": step_name,
+                    "response_type": response.type,
+                    "model_ms": model_ms,
+                    "streamed_chars": len(streamed_text),
+                    "output_chars": len(response.text or ""),
+                    "tool_call_count": len(response.tool_calls or []),
+                    "first_token_model_ms": message_metadata.get("timing_first_token_model_ms"),
+                },
+                usage_details=usage,
+                model=response.model or None,
+            )
+            generation_cm.__exit__(None, None, None)
             logger.info(
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=model_response_completed step_name={step_name} after_ms={model_ms} "
@@ -562,6 +649,7 @@ class AgentCore:
             provider=getattr(response, "provider", ""),
             model=getattr(response, "model", ""),
             usage=getattr(response, "usage", {}) or {},
+            metadata=getattr(response, "metadata", {}) or {},
         )
 
     def _stream_tail(self, streamed_text: str, response_text: str) -> str:
@@ -776,16 +864,55 @@ class AgentCore:
                 sender=sender,
                 metadata=message_metadata,
             )
-            result = self.tool_executor.execute(
-                tool_call["name"],
-                tool_call["input"],
-                context=tool_context,
+            tool_trace_cm = self._trace_start_tool(
+                f"tool.{tool_call['name']}",
+                input=tool_call["input"],
+                metadata={
+                    "run_id": run_id,
+                    "trace_id": message_metadata.get("trace_id"),
+                    "thread_id": thread_id,
+                    "step_name": step_name,
+                    "tool_call_id": tool_call["id"],
+                    "tool_name": tool_call["name"],
+                    "channel": channel,
+                    "channel_instance": channel_instance,
+                    "session_id": session_id,
+                },
             )
+            tool_trace = tool_trace_cm.__enter__()
+            try:
+                result = self.tool_executor.execute(
+                    tool_call["name"],
+                    tool_call["input"],
+                    context=tool_context,
+                )
+            except Exception as exc:
+                tool_trace.update(level="ERROR", status_message=str(exc))
+                tool_trace_cm.__exit__(type(exc), exc, exc.__traceback__)
+                raise
             tool_exec_ms = elapsed_ms(tool_exec_started_at)
             tool_roundtrip_ms = elapsed_ms(tool_dispatch_started_at)
             message_metadata["timing_tool_exec_ms_total"] += tool_exec_ms
             message_metadata["timing_tool_roundtrip_ms_total"] += tool_roundtrip_ms
             message_metadata["timing_tool_call_count"] += 1
+            tool_failed = self._is_tool_failure_result(result)
+            tool_trace_update = {
+                "output": result,
+                "metadata": {
+                    "run_id": run_id,
+                    "trace_id": message_metadata.get("trace_id"),
+                    "tool_call_id": tool_call["id"],
+                    "tool_name": tool_call["name"],
+                    "exec_ms": tool_exec_ms,
+                    "roundtrip_ms": tool_roundtrip_ms,
+                    "result_chars": len(result or ""),
+                    "failed": tool_failed,
+                },
+            }
+            if tool_failed:
+                tool_trace_update["level"] = "ERROR"
+            tool_trace.update(**tool_trace_update)
+            tool_trace_cm.__exit__(None, None, None)
             tool_message_id = str(uuid4())
             tool_message = {
                 "id": tool_message_id,
@@ -803,7 +930,7 @@ class AgentCore:
                 f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=tool_execution_completed step_name={step_name} tool_name={tool_call['name']} "
                 f"tool_call_id={tool_call['id']} exec_ms={tool_exec_ms} roundtrip_ms={tool_roundtrip_ms} "
-                f"result_chars={len(result or '')} failed={self._is_tool_failure_result(result)}"
+                f"result_chars={len(result or '')} failed={tool_failed}"
             )
             self.react_logger.record(
                 "tool_result",
@@ -814,7 +941,7 @@ class AgentCore:
                 tool_call_id=tool_call["id"],
                 tool_name=tool_call["name"],
                 result=result,
-                failed=self._is_tool_failure_result(result),
+                failed=tool_failed,
             )
             session.append(tool_message)
             context.append(tool_message)
@@ -909,6 +1036,30 @@ class AgentCore:
     def _ensure_active(self, runtime_control: RunControl | None) -> None:
         if runtime_control is not None:
             runtime_control.ensure_active()
+
+    def _trace_start_trace(self, name: str, **fields):
+        if self.trace_client is None:
+            return NoopObservation()
+        return self.trace_client.start_trace(name, **fields)
+
+    def _trace_start_span(self, name: str, **fields):
+        if self.trace_client is None:
+            return NoopObservation()
+        return self.trace_client.start_span(name, **fields)
+
+    def _trace_start_generation(self, name: str, **fields):
+        if self.trace_client is None:
+            return NoopObservation()
+        return self.trace_client.start_generation(name, **fields)
+
+    def _trace_start_tool(self, name: str, **fields):
+        if self.trace_client is None:
+            return NoopObservation()
+        return self.trace_client.start_tool(name, **fields)
+
+    def _trace_flush(self) -> None:
+        if self.trace_client is not None:
+            self.trace_client.flush()
 
     def _requires_approval(self, tool_name: str) -> bool:
         if tool_name in {"file_write", "profile_write"}:
@@ -1152,6 +1303,7 @@ class AgentCore:
         runtime_services: RuntimeServices | None = None,
         enable_shell: bool = False,
         shell_requires_confirmation: bool = True,
+        trace_client=None,
     ) -> "AgentCore":
         """测试专用工厂。
 
@@ -1178,4 +1330,5 @@ class AgentCore:
             runtime_services=runtime_services,
             enable_shell=enable_shell,
             shell_requires_confirmation=shell_requires_confirmation,
+            trace_client=trace_client,
         )

@@ -182,6 +182,74 @@ class CapturingProviderManager:
         return type("Resp", (), {"type": "text", "text": "好的，已记住。", "tool_calls": None})()
 
 
+class RecordingTraceObservation:
+    def __init__(self, recorder, kind: str, name: str, **fields) -> None:
+        self.recorder = recorder
+        self.kind = kind
+        self.name = name
+        self.fields = fields
+
+    def __enter__(self):
+        self.recorder.events.append({"event": "start", "kind": self.kind, "name": self.name, **self.fields})
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.recorder.events.append({"event": "end", "kind": self.kind, "name": self.name, "error": str(exc) if exc else None})
+        return False
+
+    def update(self, **fields):
+        self.recorder.events.append({"event": "update", "kind": self.kind, "name": self.name, **fields})
+
+
+class RecordingTraceClient:
+    def __init__(self) -> None:
+        self.events = []
+
+    def start_trace(self, name: str, **fields):
+        return RecordingTraceObservation(self, "trace", name, **fields)
+
+    def start_span(self, name: str, **fields):
+        return RecordingTraceObservation(self, "span", name, **fields)
+
+    def start_generation(self, name: str, **fields):
+        return RecordingTraceObservation(self, "generation", name, **fields)
+
+    def start_tool(self, name: str, **fields):
+        return RecordingTraceObservation(self, "tool", name, **fields)
+
+    def flush(self):
+        self.events.append({"event": "flush"})
+
+
+def test_agent_core_records_langfuse_style_trace_for_model_and_tool(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    (workspace / "notes.txt").write_text("hello", encoding="utf-8")
+    tracer = RecordingTraceClient()
+    core = AgentCore.build_for_test(workspace, FakeProviderManager(), trace_client=tracer)
+
+    message = NormalizedMessage(
+        message_id="trace-langfuse-msg",
+        session_id="cli:default",
+        sender="user",
+        body="读取 notes.txt",
+        attachments=[],
+        channel="cli",
+        metadata={},
+    )
+
+    core.run_sync(message)
+
+    assert any(event["event"] == "start" and event["kind"] == "trace" and event["name"] == "agent.run" for event in tracer.events)
+    assert any(event["event"] == "start" and event["kind"] == "generation" and event["name"] == "llm.chat" for event in tracer.events)
+    assert any(event["event"] == "start" and event["kind"] == "tool" and event["name"] == "tool.file_read" for event in tracer.events)
+    assert any(event["event"] == "update" and event["kind"] == "tool" and "hello" in event.get("output", "") for event in tracer.events)
+    assert any(event["event"] == "flush" for event in tracer.events)
+
+
 def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
     """成功回复后应写入记忆，下一轮应自动注入相关记忆。"""
 

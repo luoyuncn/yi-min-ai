@@ -38,8 +38,11 @@ class OpenAICompatProvider(LLMProvider):
     async def call(self, request: LLMRequest) -> LLMResponse:
         kwargs = self._build_request_kwargs(request)
         self._log_request_config(kwargs, stream=False)
+        request_metadata = self._build_request_metadata(kwargs, stream=False)
         response = await self._client.chat.completions.create(**kwargs)
-        return self._convert_response(response)
+        converted = self._convert_response(response)
+        converted.metadata.update(request_metadata)
+        return converted
 
     async def call_stream(self, request: LLMRequest):
         """执行 OpenAI Chat Completions 流式调用。"""
@@ -48,6 +51,7 @@ class OpenAICompatProvider(LLMProvider):
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
         self._log_request_config(kwargs, stream=True)
+        request_metadata = self._build_request_metadata(kwargs, stream=True)
         stream_started_at = monotonic()
         stream = await self._client.chat.completions.create(**kwargs)
 
@@ -154,6 +158,23 @@ class OpenAICompatProvider(LLMProvider):
                 provider=self.config.name,
                 model=self.config.model,
                 usage=usage,
+                metadata={
+                    **request_metadata,
+                    "stream_stats": {
+                        "total_ms": total_ms,
+                        "chunks": chunk_count,
+                        "content_chunks": content_chunks,
+                        "tool_call_chunks": tool_call_chunks,
+                        "empty_choice_chunks": empty_choice_chunks,
+                        "reasoning_chunks": reasoning_chunks,
+                        "reasoning_chars": reasoning_chars,
+                        "content_chars": len(response_text or ""),
+                        "first_chunk_ms": first_chunk_ms if first_chunk_ms is not None else -1,
+                        "first_content_ms": first_content_ms if first_content_ms is not None else -1,
+                        "last_content_ms": last_content_ms if last_content_ms is not None else -1,
+                        "max_chunk_gap_ms": max_chunk_gap_ms,
+                    },
+                },
             ),
         )
 
@@ -196,6 +217,26 @@ class OpenAICompatProvider(LLMProvider):
             f"thinking_type={thinking_type} "
             f"base_url={self.config.base_url or 'default'}"
         )
+
+    def _build_request_metadata(self, kwargs: dict, *, stream: bool) -> dict:
+        extra_body = kwargs.get("extra_body") or {}
+        thinking = extra_body.get("thinking") or {}
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+        return {
+            "provider": self.config.name,
+            "model": self.config.model,
+            "base_url": self.config.base_url or "default",
+            "stream": stream,
+            "message_count": len(kwargs.get("messages", [])),
+            "tool_count": len(kwargs.get("tools", [])),
+            "message_chars": _json_char_count(kwargs.get("messages", [])),
+            "tool_schema_chars": _json_char_count(kwargs.get("tools", [])),
+            "max_tokens": kwargs.get("max_tokens"),
+            "temperature": kwargs.get("temperature"),
+            "top_p": kwargs.get("top_p"),
+            "enable_thinking": extra_body.get("enable_thinking"),
+            "thinking_type": thinking_type,
+        }
 
     def _convert_messages(self, messages: list[dict]) -> list[dict]:
         """把内部消息格式转换成 OpenAI messages 格式。
@@ -265,6 +306,7 @@ class OpenAICompatProvider(LLMProvider):
                 text=response,
                 provider=self.config.name,
                 model=self.config.model,
+                metadata={},
             )
 
         choice = response.choices[0]
@@ -298,6 +340,7 @@ class OpenAICompatProvider(LLMProvider):
             provider=self.config.name,
             model=self.config.model,
             usage=usage,
+            metadata={},
         )
 
     def _normalize_base_url(self, base_url: str) -> str:

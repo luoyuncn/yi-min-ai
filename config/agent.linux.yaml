@@ -12,6 +12,20 @@ tools:
     enabled: true
     requires_confirmation: true
 
+observability:
+  langfuse:
+    enabled: true
+    public_key_env: "LANGFUSE_PUBLIC_KEY"
+    secret_key_env: "LANGFUSE_SECRET_KEY"
+    base_url: "http://192.169.26.221:3000"
+    capture_inputs: true
+    capture_outputs: true
+    capture_tool_args: true
+    capture_tool_results: true
+    capture_reasoning: "metadata"
+    max_field_chars: 12000
+    sample_rate: 1.0
+
 mflow:
   enabled: false
   dataset_name: "workspace"

@@ -25,6 +25,7 @@ from agent.memory.mflow_bridge import (
     MflowLLMConfig,
     MflowRuntimeConfig,
 )
+from agent.observability.langfuse_tracer import LangfuseTraceClient, NoopTraceClient
 from agent.session import SessionManager
 from agent.skills import SkillLoader
 from agent.tools.runtime_context import RuntimeServices
@@ -272,6 +273,7 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
     db_path = workspace_dir / "agent.db"
     session_archive = SessionArchive(db_path)
     runtime_services = RuntimeServices()
+    trace_client = NoopTraceClient() if testing else LangfuseTraceClient.from_settings(settings)
     shell_settings = getattr(getattr(settings, "tools", None), "shell", None)
     core = AgentCore(
         workspace_dir=workspace_dir,
@@ -289,6 +291,7 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         memory_store=MemoryStore(db_path),
         memory_extractor=MemoryExtractor(),
         mflow_bridge=mflow_bridge,
+        trace_client=trace_client,
         runtime_services=runtime_services,
         enable_shell=bool(getattr(shell_settings, "enabled", False)),
         shell_requires_confirmation=bool(getattr(shell_settings, "requires_confirmation", True)),

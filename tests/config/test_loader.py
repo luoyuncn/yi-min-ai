@@ -270,6 +270,47 @@ def test_load_settings_parses_shell_tool_settings(tmp_path: Path) -> None:
     assert settings.tools.shell.requires_confirmation is True
 
 
+def test_load_settings_parses_langfuse_observability_settings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: qwen\n"
+        "observability:\n"
+        "  langfuse:\n"
+        "    enabled: true\n"
+        "    public_key_env: LANGFUSE_PUBLIC_KEY\n"
+        "    secret_key_env: LANGFUSE_SECRET_KEY\n"
+        "    base_url: http://192.169.26.221:3000\n"
+        "    capture_inputs: true\n"
+        "    capture_outputs: true\n"
+        "    capture_tool_args: true\n"
+        "    capture_tool_results: true\n"
+        "    capture_reasoning: metadata\n"
+        "    max_field_chars: 12000\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.observability.langfuse.enabled is True
+    assert settings.observability.langfuse.base_url == "http://192.169.26.221:3000"
+    assert settings.observability.langfuse.capture_reasoning == "metadata"
+
+
 def test_load_settings_parses_optional_generation_parameters(tmp_path: Path) -> None:
     """Provider 可选的公共生成参数应能从 YAML 正确解析出来。"""
 
