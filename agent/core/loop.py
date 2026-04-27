@@ -172,7 +172,7 @@ class AgentCore:
                     yield event
                 return
 
-            selected_history = self._select_history_for_context(session.history)
+            selected_history = self._select_history_for_context(session.history, user_message=message.body)
             context = self.context_assembler.assemble(
                 soul_text=self.always_on_memory.load_soul(),
                 memory_text=self.always_on_memory.load_profile(),
@@ -914,10 +914,12 @@ class AgentCore:
             return True
         return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
 
-    def _select_history_for_context(self, history: list[dict]) -> list[dict]:
+    def _select_history_for_context(self, history: list[dict], *, user_message: str = "") -> list[dict]:
         """Keep the model context bounded while preserving recent complete turns."""
 
         if self.context_history_turns <= 0 or not history:
+            return []
+        if self._is_assistant_identity_query(user_message):
             return []
 
         user_turns_seen = 0
@@ -931,7 +933,38 @@ class AgentCore:
         selected = list(history[start_index:])
         while selected and selected[0].get("role") == "tool":
             selected.pop(0)
-        return selected
+        return self._sanitize_history_for_context(selected)
+
+    def _sanitize_history_for_context(self, history: list[dict]) -> list[dict]:
+        sanitized: list[dict] = []
+        for message in history:
+            role = message.get("role")
+            if role == "tool":
+                continue
+            clean_message = {
+                key: value
+                for key, value in message.items()
+                if key not in {"tool_calls", "tool_call_id"}
+            }
+            if role == "assistant" and not clean_message.get("content"):
+                continue
+            sanitized.append(clean_message)
+        return sanitized
+
+    def _is_assistant_identity_query(self, text: str) -> bool:
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        return normalized in {
+            "你是谁",
+            "你叫什么",
+            "你叫什么名字",
+            "你是谁？",
+            "你叫什么？",
+            "你叫什么名字？",
+            "who are you",
+            "what is your name",
+        }
 
     def _build_memory_items_text(self, user_message: str) -> str:
         if self.memory_store is None:

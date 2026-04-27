@@ -281,6 +281,68 @@ def test_agent_core_limits_long_history_in_model_context(tmp_path: Path) -> None
     assert len(sent_user_messages) == 13
 
 
+def test_agent_core_removes_historical_tool_payloads_from_model_context(tmp_path: Path) -> None:
+    """历史工具参数不应把旧 SOUL 内容重新注入新一轮上下文。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\n你是银月。\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider)
+
+    async def seed_session():
+        session = await core.session_manager.get_or_create("feishu:feishu:chat-stale-tools", channel="feishu")
+        session.append(
+            {
+                "id": "old-user",
+                "role": "user",
+                "content": "你叫曾国藩，根据他的原型完善你的SOUL",
+            }
+        )
+        session.append(
+            {
+                "id": "old-assistant-tool",
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "old-tool",
+                        "name": "file_write",
+                        "input": {"path": "SOUL.md", "content": "你是曾国藩。"},
+                    }
+                ],
+            }
+        )
+        session.append({"id": "old-tool-result", "role": "tool", "tool_call_id": "old-tool", "content": "ok"})
+
+    import asyncio
+
+    asyncio.run(seed_session())
+
+    message = NormalizedMessage(
+        message_id="latest",
+        session_id="chat-stale-tools",
+        sender="ou-user-1",
+        body="你是谁",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    sent_messages = provider.requests[-1].messages
+    sent_text = "\n".join(message.get("content", "") for message in sent_messages)
+    assert "你是银月" in sent_text
+    assert "你叫曾国藩" not in sent_text
+    assert "你是曾国藩" not in sent_text
+    assert all("tool_calls" not in message for message in sent_messages[1:-1])
+    assert not any(message.get("role") == "tool" for message in sent_messages[1:-1])
+
+
 def test_agent_core_writes_react_log_for_model_decision_and_tool_result(tmp_path: Path) -> None:
     """ReAct 轨迹应单独写入 logs/react.log，包含模型决策和工具结果。"""
 

@@ -51,6 +51,23 @@ def test_context_assembler_includes_dynamic_system_time() -> None:
     assert "2026-04-23T18:40:00+08:00" in system_content
 
 
+def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
+    assembler = ContextAssembler(system_prompt="You are Yi Min.")
+
+    context = assembler.assemble(
+        soul_text="# Identity\n你是银月。",
+        memory_text="# User Profile\n",
+        tool_index="Available Tools:",
+        skill_index="Available Skills:",
+        history=[{"role": "assistant", "content": "我是曾国藩。"}],
+        user_message="你是谁",
+    )
+
+    system_content = context[0]["content"]
+    assert "[IDENTITY SOURCE OF TRUTH]" in system_content
+    assert "SOUL.md is authoritative" in system_content
+
+
 def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
     """系统上下文应同时显式暴露工具索引和技能索引。"""
 
