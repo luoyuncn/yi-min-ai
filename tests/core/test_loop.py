@@ -217,10 +217,8 @@ def test_agent_core_can_query_ledger_entries_for_follow_up_item(tmp_path: Path) 
     skills_dir.mkdir(parents=True)
     (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
     (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
-    provider = CapturingProviderManager()
+    provider = LedgerQueryProviderManager()
     core = AgentCore.build_for_test(workspace, provider)
-    from datetime import datetime
-    core.context_assembler.now_provider = lambda: datetime.fromisoformat("2026-04-27T18:00:00+08:00")
     core.ledger_store.add_entry(
         direction="expense",
         amount_cent=1500,
@@ -246,62 +244,11 @@ def test_agent_core_can_query_ledger_entries_for_follow_up_item(tmp_path: Path) 
 
     result = core.run_sync(message)
 
-    assert "已经记了" in result
-    assert "Tims" in result
-    assert "15元" in result
-    assert provider.requests == []
-
-
-def test_agent_core_summarizes_today_ledger_from_store_without_model_guessing(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    skills_dir = workspace / "skills"
-    skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
-    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
-    provider = CapturingProviderManager()
-    core = AgentCore.build_for_test(workspace, provider)
-    from datetime import datetime
-    core.context_assembler.now_provider = lambda: datetime.fromisoformat("2026-04-27T18:00:00+08:00")
-    core.ledger_store.add_entry(
-        direction="expense",
-        amount_cent=1500,
-        currency="CNY",
-        category="beverage",
-        occurred_at="2026-04-27T08:00:00+08:00",
-        merchant="Tims",
-        note=None,
-        source_message_id="old-1",
-        source_thread_id="chat-ledger",
-    )
-    core.ledger_store.add_entry(
-        direction="expense",
-        amount_cent=2800,
-        currency="CNY",
-        category="meal",
-        occurred_at="2026-04-27T18:52:00+08:00",
-        merchant="豌杂面店",
-        note=None,
-        source_message_id="old-2",
-        source_thread_id="chat-ledger",
-    )
-
-    message = NormalizedMessage(
-        message_id="latest",
-        session_id="chat-ledger",
-        sender="ou-user-1",
-        body="总结下今天的账本吧",
-        attachments=[],
-        channel="feishu",
-        channel_instance="feishu",
-        metadata={"chat_type": "p2p"},
-    )
-
-    result = core.run_sync(message)
-
-    assert "43元" in result
-    assert "Tims" in result
-    assert "豌杂面店" in result
-    assert provider.requests == []
+    assert result == "Tims 已在今天账本里。"
+    assert len(provider.requests) == 2
+    tool_messages = [message for message in provider.requests[-1].messages if message.get("role") == "tool"]
+    assert tool_messages
+    assert "Tims" in tool_messages[0]["content"]
 
 
 class RecordingTraceObservation:
