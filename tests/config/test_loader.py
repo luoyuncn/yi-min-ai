@@ -92,8 +92,40 @@ def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -
 
     assert settings.agent.name == "Yi Min"
     assert settings.agent.workspace_dir == workspace_dir.resolve()
+    assert settings.agent.context_history_turns == 10
     assert settings.providers.default_primary == "claude-sonnet"
     assert settings.providers.items[0].model == "claude-sonnet-4-20250514"
+
+
+def test_load_settings_parses_context_history_turns_as_user_turns(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "  context_history_turns: 10\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: qwen\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.agent.context_history_turns == 10
 
 
 def test_load_settings_rejects_missing_required_agent_name(tmp_path: Path) -> None:

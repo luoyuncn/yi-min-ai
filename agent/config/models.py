@@ -17,6 +17,7 @@ class AgentSettings:
     name: str
     workspace_dir: Path
     max_iterations: int
+    context_history_turns: int = 10
 
 
 @dataclass(slots=True)

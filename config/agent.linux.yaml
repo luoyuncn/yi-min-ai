@@ -2,6 +2,8 @@ agent:
   name: "Yi Min"
   workspace_dir: "../workspace"
   max_iterations: 8
+  # 10 轮对话 = 最近 10 条用户消息及其助手回复，约 20 条历史消息。
+  context_history_turns: 10
 
 providers:
   config_file: "providers.yaml"

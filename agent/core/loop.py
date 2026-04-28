@@ -69,8 +69,8 @@ class AgentCore:
         enable_shell: bool = False,
         shell_requires_confirmation: bool = True,
         max_iterations: int = 8,
-        context_history_turns: int = 12,
-        system_prompt: str = "你是 Yi Min。",
+        context_history_turns: int = 10,
+        system_prompt: str = "",
     ) -> None:
         # 这些依赖都在 build_app 或测试工厂中注入；
         # AgentCore 自己不负责创建它们，只负责调度它们协作。
@@ -89,6 +89,7 @@ class AgentCore:
         self.note_store = note_store
         self.memory_store = memory_store
         self.memory_extractor = memory_extractor
+        self._background_tasks: set[asyncio.Task] = set()
         self.react_logger = react_logger or ReactTraceLogger(self.workspace_dir / "logs" / "react.log")
         self.trace_client = trace_client
         self.context_assembler = ContextAssembler(system_prompt=system_prompt)
@@ -283,7 +284,12 @@ class AgentCore:
     def run_sync(self, message) -> str:
         """给同步调用方（例如 CLI）提供一个方便入口。"""
 
-        return asyncio.run(self.run(message))
+        async def run_and_drain() -> str:
+            result = await self.run(message)
+            await self.drain_background_tasks()
+            return result
+
+        return asyncio.run(run_and_drain())
 
     async def _run_loop(
         self,
@@ -480,7 +486,7 @@ class AgentCore:
                     yield AssistantTextEndEvent(message_id=assistant_message_id)
                 session.append({"id": assistant_message_id, "role": "assistant", "content": assistant_text})
                 self.session_archive.persist_session(session)
-                self._extract_memories(
+                self._schedule_memory_extraction(
                     user_message=user_message,
                     assistant_text=assistant_text,
                     thread_id=thread_id,
@@ -582,7 +588,7 @@ class AgentCore:
                 yield AssistantTextEndEvent(message_id=direct_message_id)
                 session.append({"id": direct_message_id, "role": "assistant", "content": direct_text})
                 self.session_archive.persist_session(session)
-                self._extract_memories(
+                self._schedule_memory_extraction(
                     user_message=user_message,
                     assistant_text=direct_text,
                     thread_id=thread_id,
@@ -1228,7 +1234,7 @@ class AgentCore:
             for row in rows[:8]
         )
 
-    def _extract_memories(
+    def _schedule_memory_extraction(
         self,
         *,
         user_message: str,
@@ -1240,33 +1246,96 @@ class AgentCore:
         if self.memory_store is None or self.memory_extractor is None:
             return
 
-        candidates = self.memory_extractor.extract(
-            user_message=user_message,
-            assistant_message=assistant_text,
-            thread_id=thread_id,
-            message_id=source_message_id,
-            sender_id=sender_id,
-        )
-        for candidate in candidates:
-            memory_id = self.memory_store.add_item(
-                kind=candidate.kind,
-                title=candidate.title,
-                content=candidate.content,
-                confidence=candidate.confidence,
-                importance=candidate.importance,
-                source_thread_id=candidate.source_thread_id,
-                source_message_id=candidate.source_message_id,
-                source_sender_id=candidate.source_sender_id,
-            )
-            self.react_logger.record(
-                "profile_write",
+        task = asyncio.create_task(
+            self._extract_memories(
+                user_message=user_message,
+                assistant_text=assistant_text,
                 thread_id=thread_id,
                 source_message_id=source_message_id,
-                memory_id=memory_id,
-                kind=candidate.kind,
-                title=candidate.title,
-                content=candidate.content,
+                sender_id=sender_id,
             )
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def drain_background_tasks(self) -> None:
+        """等待当前已调度的后台任务完成，主要供 CLI 和测试收尾使用。"""
+
+        while self._background_tasks:
+            tasks = list(self._background_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _extract_memories(
+        self,
+        *,
+        user_message: str,
+        assistant_text: str,
+        thread_id: str,
+        source_message_id: str,
+        sender_id: str | None,
+    ) -> None:
+        if self.memory_store is None or self.memory_extractor is None:
+            return
+
+        try:
+            extract_async = getattr(self.memory_extractor, "extract_async", None)
+            if extract_async is not None:
+                candidates = await extract_async(
+                    user_message=user_message,
+                    assistant_message=assistant_text,
+                    thread_id=thread_id,
+                    message_id=source_message_id,
+                    sender_id=sender_id,
+                    existing_memories=self._build_existing_memory_snapshot(),
+                )
+            else:
+                candidates = self.memory_extractor.extract(
+                    user_message=user_message,
+                    assistant_message=assistant_text,
+                    thread_id=thread_id,
+                    message_id=source_message_id,
+                    sender_id=sender_id,
+                )
+            for candidate in candidates:
+                memory_id = self.memory_store.add_item(
+                    kind=candidate.kind,
+                    title=candidate.title,
+                    content=candidate.content,
+                    confidence=candidate.confidence,
+                    importance=candidate.importance,
+                    source_thread_id=candidate.source_thread_id,
+                    source_message_id=candidate.source_message_id,
+                    source_sender_id=candidate.source_sender_id,
+                )
+                self.react_logger.record(
+                    "profile_write",
+                    thread_id=thread_id,
+                    source_message_id=source_message_id,
+                    memory_id=memory_id,
+                    kind=candidate.kind,
+                    title=candidate.title,
+                    content=candidate.content,
+                )
+        except Exception as exc:
+            logger.warning("Memory extraction failed: %s", exc, exc_info=True)
+
+    def _build_existing_memory_snapshot(self) -> str:
+        if self.memory_store is None:
+            return ""
+
+        rows: list[dict] = []
+        seen_ids: set[str] = set()
+        for kind in ("profile", "preference", "fact", "plan", "constraint", "relationship"):
+            for row in self.memory_store.list_recent(limit=3, kind=kind):
+                if row["id"] in seen_ids:
+                    continue
+                rows.append(row)
+                seen_ids.add(row["id"])
+
+        return "\n".join(
+            f"- {row['kind']}: {row['title']} - {row['content']}"
+            for row in rows[:12]
+        )
 
     async def _ingest_to_mflow(self, session, thread_id: str) -> None:
         """异步将最新一轮对话写入 M-flow（非阻塞）"""

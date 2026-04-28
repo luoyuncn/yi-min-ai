@@ -80,6 +80,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             name=_require_str(agent_section, "name", "agent"),
             workspace_dir=_resolve_agent_workspace_dir(agent_section, config_dir=config_dir, channels=channels),
             max_iterations=_require_int(agent_section, "max_iterations", "agent"),
+            context_history_turns=_optional_int(agent_section, "context_history_turns") or 10,
         ),
         providers=ProviderSettings(
             config_file=provider_path,

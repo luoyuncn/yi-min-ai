@@ -36,6 +36,13 @@ def test_system_prompt_routes_fresh_facts_to_web_search() -> None:
     assert "不要编造实时事实" in prompt
 
 
+def test_system_prompt_prioritizes_immediate_context_for_elliptical_followups() -> None:
+    prompt = _build_system_prompt("Yi Min")
+
+    assert "省略式追问" in prompt
+    assert "优先承接上一轮助手回复" in prompt
+
+
 def test_workspace_init_uses_default_soul_template(tmp_path) -> None:
     _ensure_workspace_files(tmp_path)
 

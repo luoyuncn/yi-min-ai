@@ -672,7 +672,7 @@ class GatewayServer:
             return renderer
 
         system_prompt = getattr(getattr(runtime_app.core, "context_assembler", None), "system_prompt", "")
-        first_line = (system_prompt.splitlines()[0].strip() if system_prompt else "") or "你是 Yi Min。"
+        first_line = (system_prompt.splitlines()[0].strip() if system_prompt else "") or ""
         agent_name = "Yi Min"
         if first_line.lower().startswith("you are "):
             agent_name = first_line[8:].strip().rstrip(".") or "Yi Min"

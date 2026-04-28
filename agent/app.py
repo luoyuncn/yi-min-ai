@@ -289,13 +289,14 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         ledger_store=LedgerStore(db_path),
         note_store=NoteStore(db_path),
         memory_store=MemoryStore(db_path),
-        memory_extractor=MemoryExtractor(),
+        memory_extractor=MemoryExtractor(provider_manager=provider_manager),
         mflow_bridge=mflow_bridge,
         trace_client=trace_client,
         runtime_services=runtime_services,
         enable_shell=bool(getattr(shell_settings, "enabled", False)),
         shell_requires_confirmation=bool(getattr(shell_settings, "requires_confirmation", True)),
         max_iterations=settings.agent.max_iterations,
+        context_history_turns=settings.agent.context_history_turns,
         system_prompt=_build_system_prompt(settings.agent.name),
     )
     logger.info("event=app_bootstrap_completed workspace=%s", workspace_dir)
@@ -472,6 +473,11 @@ def _build_system_prompt(agent_name: str) -> str:
             ),
             "",
             "[回复风格与工具结果]",
+            (
+                "回答“比如呢”“这个呢”“那呢”等省略式追问时，"
+                "必须优先承接上一轮助手回复中的话题和问题，再参考更早的上下文；"
+                "除非用户明确切换话题，不要被更早出现的地点、计划或实体牵走。"
+            ),
             "提醒或 cron 任务创建成功后，最终可见回复要简短；除非用户询问，不要解释内部调度推理。",
             "对明确保存请求和重要自动笔记保存，给出简短确认；其他自动保存保持安静。",
             (

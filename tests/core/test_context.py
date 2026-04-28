@@ -8,7 +8,7 @@ from agent.core.context import ContextAssembler
 def test_context_assembler_includes_system_memory_skills_history_and_user_message() -> None:
     """上下文中应同时包含系统层、历史消息和本轮用户输入。"""
 
-    assembler = ContextAssembler(system_prompt="你是 Yi Min。")
+    assembler = ContextAssembler(system_prompt="")
 
     context = assembler.assemble(
         soul_text="# Identity\nYi Min",
@@ -31,7 +31,7 @@ def test_context_assembler_includes_dynamic_system_time() -> None:
     """系统提示词中应注入当前系统时间，避免模型误判日期。"""
 
     assembler = ContextAssembler(
-        system_prompt="你是 Yi Min。",
+        system_prompt="",
         now_provider=lambda: datetime.fromisoformat("2026-04-23T18:40:00+08:00"),
     )
 
@@ -52,7 +52,7 @@ def test_context_assembler_includes_dynamic_system_time() -> None:
 
 
 def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
-    assembler = ContextAssembler(system_prompt="你是 Yi Min。")
+    assembler = ContextAssembler(system_prompt="")
 
     context = assembler.assemble(
         soul_text="# Identity\n你是银月。",
@@ -71,7 +71,7 @@ def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
 def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
     """系统上下文应同时显式暴露工具索引和技能索引。"""
 
-    assembler = ContextAssembler(system_prompt="你是 Yi Min。")
+    assembler = ContextAssembler(system_prompt="")
 
     context = assembler.assemble(
         soul_text="# Identity\nYi Min",
@@ -93,7 +93,7 @@ def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
 def test_context_assembler_includes_feishu_rendering_hint() -> None:
     """飞书渠道应显式提示避免使用 Markdown 表格。"""
 
-    assembler = ContextAssembler(system_prompt="你是 Yi Min。")
+    assembler = ContextAssembler(system_prompt="")
 
     context = assembler.assemble(
         soul_text="# Identity\nYi Min",
@@ -116,7 +116,7 @@ def test_context_assembler_includes_feishu_rendering_hint() -> None:
 def test_context_assembler_includes_human_context_and_memory_items() -> None:
     """当前说话人和检索到的记忆应进入独立上下文块。"""
 
-    assembler = ContextAssembler(system_prompt="你是 Yi Min。")
+    assembler = ContextAssembler(system_prompt="")
 
     context = assembler.assemble(
         soul_text="# Identity\nYi Min",
@@ -143,7 +143,7 @@ def test_context_assembler_includes_human_context_and_memory_items() -> None:
 
 def test_context_assembler_routes_one_shot_reminders_to_reminder_tools() -> None:
     assembler = ContextAssembler(
-        system_prompt="你是 Yi Min。",
+        system_prompt="",
         now_provider=lambda: datetime.fromisoformat("2026-04-27T12:37:00+08:00"),
     )
 

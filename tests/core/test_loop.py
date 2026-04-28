@@ -7,6 +7,7 @@
 
 import logging
 import json
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -180,6 +181,17 @@ class CapturingProviderManager:
     async def call(self, request):
         self.requests.append(request)
         return type("Resp", (), {"type": "text", "text": "好的，已记住。", "tool_calls": None})()
+
+
+class BlockingMemoryExtractor:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def extract_async(self, **kwargs):
+        self.started.set()
+        await self.release.wait()
+        return []
 
 
 class LedgerQueryProviderManager:
@@ -363,8 +375,52 @@ def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
     assert "ou-user-1" in second_system_content
 
 
+def test_agent_core_runs_memory_extraction_in_background(tmp_path: Path) -> None:
+    """记忆抽取不应阻塞本轮 RunFinishedEvent。"""
+
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    memory_store = MemoryStore(workspace / "agent.db")
+    provider = CapturingProviderManager()
+    core = AgentCore.build_for_test(workspace, provider, memory_store=memory_store)
+
+    message = NormalizedMessage(
+        message_id="msg-background-memory",
+        session_id="chat-background-memory",
+        sender="ou-user-1",
+        body="记住我喜欢 Tims 冷萃美式",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    async def run_and_release_memory_task():
+        extractor = BlockingMemoryExtractor()
+        core.memory_extractor = extractor
+
+        async def wait_for_finished():
+            async for event in core.run_events(message):
+                if event.kind == "run_finished":
+                    return event
+            raise AssertionError("run_finished was not emitted")
+
+        finished = await asyncio.wait_for(wait_for_finished(), timeout=0.2)
+        await asyncio.wait_for(extractor.started.wait(), timeout=0.2)
+        extractor.release.set()
+        await asyncio.wait_for(core.drain_background_tasks(), timeout=0.2)
+        return finished
+
+    finished_event = asyncio.run(run_and_release_memory_task())
+
+    assert finished_event.result_text == "好的，已记住。"
+
+
 def test_agent_core_limits_long_history_in_model_context(tmp_path: Path) -> None:
-    """长会话不应把所有历史消息塞进每次模型请求。"""
+    """长会话应保留最近 10 个用户轮次，即约 20 条历史消息。"""
 
     workspace = tmp_path / "workspace"
     skills_dir = workspace / "skills"
@@ -412,10 +468,11 @@ def test_agent_core_limits_long_history_in_model_context(tmp_path: Path) -> None
     sent_messages = provider.requests[-1].messages
     sent_text = "\n".join(message.get("content", "") for message in sent_messages)
     sent_user_messages = [message for message in sent_messages if message.get("role") == "user"]
-    assert "old user message 0" not in sent_text
-    assert "old assistant message 0" not in sent_text
-    assert "old user message 29" in sent_text
-    assert len(sent_user_messages) == 13
+    assert "old user message 19" not in sent_text
+    assert "old assistant message 19" not in sent_text
+    assert "old user message 20" in sent_text
+    assert "old assistant message 29" in sent_text
+    assert len(sent_user_messages) == 11
 
 
 def test_agent_core_removes_historical_tool_payloads_from_model_context(tmp_path: Path) -> None:
