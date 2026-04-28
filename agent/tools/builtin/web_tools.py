@@ -27,8 +27,8 @@ def web_search(query: str, num_results: int = 5) -> str:
             from duckduckgo_search import DDGS
         except ImportError:
             return (
-                "Web search unavailable: ddgs not installed. "
-                "Install with: pip install ddgs"
+                "网页搜索不可用：未安装 ddgs。"
+                "可执行 `pip install ddgs` 安装。"
             )
 
     try:
@@ -38,13 +38,13 @@ def web_search(query: str, num_results: int = 5) -> str:
         results = list(ddgs.text(query, max_results=num_results))
 
         if not results:
-            return f"No results found for: {query}"
+            return f"没有找到与以下查询相关的结果：{query}"
 
         # 格式化输出
-        lines = [f"Search results for: {query}\n"]
+        lines = [f"搜索结果：{query}\n"]
         for i, result in enumerate(results, 1):
-            title = result.get("title", "No title")
-            snippet = result.get("body", "No snippet")
+            title = result.get("title", "无标题")
+            snippet = result.get("body", "无摘要")
             url = result.get("href", "")
 
             lines.append(f"{i}. {title}")
@@ -55,4 +55,4 @@ def web_search(query: str, num_results: int = 5) -> str:
 
     except Exception as e:
         logger.error(f"Web search error: {e}", exc_info=True)
-        return f"Search failed: {str(e)}"
+        return f"搜索失败：{str(e)}"

@@ -47,7 +47,7 @@ def test_stage1_registry_can_render_tool_index(tmp_path) -> None:
 
     tool_index = registry.get_index()
 
-    assert tool_index.startswith("Available Tools:")
+    assert tool_index.startswith("可用工具：")
     assert "- ledger_upsert_draft:" in tool_index
     assert "- note_add:" in tool_index
     assert "- web_search:" in tool_index

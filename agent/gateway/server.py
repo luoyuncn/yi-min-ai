@@ -672,10 +672,12 @@ class GatewayServer:
             return renderer
 
         system_prompt = getattr(getattr(runtime_app.core, "context_assembler", None), "system_prompt", "")
-        first_line = (system_prompt.splitlines()[0].strip() if system_prompt else "") or "You are Yi Min."
+        first_line = (system_prompt.splitlines()[0].strip() if system_prompt else "") or "你是 Yi Min。"
         agent_name = "Yi Min"
         if first_line.lower().startswith("you are "):
             agent_name = first_line[8:].strip().rstrip(".") or "Yi Min"
+        elif first_line.startswith("你是 "):
+            agent_name = first_line[3:].strip().rstrip("。.") or "Yi Min"
 
         renderer = FeishuCardRenderer(agent_name=agent_name)
         self._feishu_card_renderers[channel_instance] = renderer

@@ -488,13 +488,13 @@ def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> No
 
     prompt = _build_system_prompt("Yi Min")
 
-    assert "TOOL ROUTING POLICY" in prompt
-    assert "Use ledger tools for bookkeeping requests" in prompt
-    assert "Ask follow-up questions before committing incomplete ledger entries" in prompt
-    assert "Use note tools for long-lived user facts" in prompt
-    assert "Do not store bookkeeping or note facts in PROFILE.md" in prompt
-    assert "When the user asks who they are, what their name is" in prompt
-    assert "When asked about your available tools or skills" in prompt
+    assert "[工具路由策略]" in prompt
+    assert "涉及收入、支出、报销、转账、消费汇总等记账请求时，使用账本工具" in prompt
+    assert "账目必要字段不完整时，先追问用户" in prompt
+    assert "笔记是独立的 Obsidian/Notion 式知识库" in prompt
+    assert "不要把账本事实或笔记事实写入 `PROFILE.md`" in prompt
+    assert "当用户询问自己是谁、自己的名字是什么" in prompt
+    assert "当用户询问你有哪些工具或技能时" in prompt
 
 
 def test_build_mflow_llm_config_qualifies_dashscope_model_for_litellm(tmp_path: Path) -> None:

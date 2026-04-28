@@ -357,9 +357,9 @@ def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
 
     assert memory_store.search("冷萃", limit=5)
     second_system_content = provider.requests[-1].messages[0]["content"]
-    assert "[MEMORY ITEMS]" in second_system_content
+    assert "[检索到的长期记忆]" in second_system_content
     assert "Tims 冷萃美式" in second_system_content
-    assert "[HUMAN CONTEXT]" in second_system_content
+    assert "[用户上下文]" in second_system_content
     assert "ou-user-1" in second_system_content
 
 

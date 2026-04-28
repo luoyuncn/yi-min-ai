@@ -67,51 +67,55 @@ class ContextAssembler:
 
         # 系统层内容被收敛成一条大的 system message，
         # 这样模型每次调用都能稳定拿到人格、长期记忆和技能索引。
+        #
+        # 注意：下面这些分区标题和说明都会直接暴露给 LLM。
+        # 标题用中文是为了减少中英夹杂；文件名、工具名仍保留原样，
+        # 因为它们同时是代码和 function calling 的稳定接口。
         current_time = self.now_provider().astimezone()
         system_time_block = "\n".join(
             [
-                "[SYSTEM TIME]",
-                f"Current local datetime ISO: {current_time.isoformat()}",
-                f"Current local datetime: {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
-                f"Current local date: {current_time.strftime('%Y-%m-%d')}",
-                f"Timezone: {current_time.tzinfo}",
+                "[系统时间]",
+                f"当前本地时间 ISO：{current_time.isoformat()}",
+                f"当前本地时间：{current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+                f"当前本地日期：{current_time.strftime('%Y-%m-%d')}",
+                f"时区：{current_time.tzinfo}",
             ]
         )
         channel_block_lines = [
-            "[CHANNEL CONTEXT]",
-            f"Current channel: {channel}/{channel_instance}",
+            "[渠道上下文]",
+            f"当前渠道：{channel}/{channel_instance}",
         ]
         if channel == "feishu":
-            channel_block_lines.append("Avoid Markdown tables. Prefer short paragraphs and flat bullet lists.")
-            channel_block_lines.append("Keep formatting stable in Feishu cards. Do not rely on table rendering.")
-            channel_block_lines.append("Reply concisely after successful tool calls; do not narrate hidden reasoning.")
+            channel_block_lines.append("避免使用 Markdown 表格，优先使用短段落和平铺项目列表。")
+            channel_block_lines.append("在飞书卡片里保持格式稳定，不要依赖表格渲染。")
+            channel_block_lines.append("工具调用成功后简洁回复，不要叙述隐藏推理过程。")
         channel_block = "\n".join(channel_block_lines)
         reminder_policy_block = "\n".join(
             [
-                "[REMINDER ROUTING]",
-                "Use reminder_create for one-shot reminders, alarms, and relative reminders.",
-                "Use cron tools only for recurring schedules such as daily, weekly, or monthly tasks.",
-                "For relative reminders, pass delay_seconds instead of calculating a cron expression.",
-                "After a reminder is created, reply with one short confirmation including the due time.",
+                "[提醒路由]",
+                "一次性提醒、闹钟和相对时间提醒使用 `reminder_create`。",
+                "只有每天、每周、每月等周期性日程才使用 cron 工具。",
+                "相对时间提醒应传入 `delay_seconds`，不要自行计算 cron 表达式。",
+                "提醒创建成功后，用一句简短确认回复，并包含具体执行时间。",
             ]
         )
         human_block_lines = [
-            "[HUMAN CONTEXT]",
-            f"Current sender: {sender or 'unknown'}",
-            f"Chat type: {(metadata or {}).get('chat_type', 'unknown')}",
+            "[用户上下文]",
+            f"当前发送者：{sender or 'unknown'}",
+            f"聊天类型：{(metadata or {}).get('chat_type', 'unknown')}",
         ]
         human_block = "\n".join(human_block_lines)
         memory_items_block = "\n".join(
             [
-                "[MEMORY ITEMS]",
-                memory_items_text.strip() or "No retrieved durable memory items.",
+                "[检索到的长期记忆]",
+                memory_items_text.strip() or "本轮没有检索到长期记忆项。",
             ]
         )
         identity_source_block = "\n".join(
             [
-                "[IDENTITY SOURCE OF TRUTH]",
-                "Current SOUL.md is authoritative for the assistant's active identity, name, persona, and style.",
-                "If chat history, notes, tool payloads, or older memories conflict with SOUL.md, follow SOUL.md.",
+                "[身份事实来源]",
+                "当前 `SOUL.md` 是助手活跃身份、名称、人格和风格的权威来源。",
+                "如果聊天历史、笔记、工具载荷或旧记忆与 `SOUL.md` 冲突，以 `SOUL.md` 为准。",
             ]
         )
         system_content = "\n\n".join(
@@ -127,9 +131,9 @@ class ContextAssembler:
                 memory_text,
                 memory_items_block,
                 reminder_policy_block,
-                "[TOOL INDEX]",
+                "[工具索引]",
                 tool_index,
-                "[SKILL INDEX]",
+                "[技能索引]",
                 skill_index,
             ]
         )

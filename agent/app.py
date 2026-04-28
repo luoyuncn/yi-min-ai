@@ -374,38 +374,40 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
 def _ensure_default_skills(skills_dir: Path) -> None:
     """确保新 workspace 自带基础业务 skill 模板。"""
 
+    # 这些默认 skill 会直接进入模型上下文，因此用中文描述业务规则；
+    # 工具名保持英文，避免影响 function calling 的精确匹配。
     defaults = {
         "bookkeeping": (
             "---\n"
             "name: bookkeeping\n"
-            "description: Proactively use ledger tools for bookkeeping, ask follow-up questions, and commit only after required fields are complete.\n"
+            "description: 主动使用账本工具处理记账请求，在必要字段完整后才提交正式账目。\n"
             "---\n"
-            "# Bookkeeping\n"
+            "# 账本处理\n"
             "\n"
-            "- If the user expresses income, expense, reimbursement, transfer, budget, or asks for bookkeeping statistics, treat it as a bookkeeping workflow.\n"
-            "- Use `ledger_upsert_draft` to save any partially known ledger fields.\n"
-            "- Ask follow-up questions when direction, amount, or occurrence time is still unclear.\n"
-            "- Only call `ledger_commit_draft` after required fields are complete.\n"
-            "- Use `ledger_query_entries` and `ledger_summary` for reporting.\n"
-            "- Do not commit guessed values. Clarify ambiguity first.\n"
-            "- Prefer ledger tools over `profile_write` or arbitrary files for bookkeeping facts.\n"
-            "- Example triggers: `今天午饭 32`, `帮我记一笔报销 120`, `这个月餐饮花了多少`.\n"
+            "- 用户表达收入、支出、报销、转账、预算，或询问账本统计时，视为账本工作流。\n"
+            "- 使用 `ledger_upsert_draft` 保存已知但尚未完整的账目字段。\n"
+            "- 当收支方向、金额或发生时间仍不明确时，先追问用户。\n"
+            "- 只有必要字段完整后，才调用 `ledger_commit_draft` 写入正式账本。\n"
+            "- 查询和汇总账本时使用 `ledger_query_entries` 与 `ledger_summary`。\n"
+            "- 不要提交猜测值；遇到歧义先澄清。\n"
+            "- 账本事实优先使用账本工具，不要写入 `profile_write` 或任意文件。\n"
+            "- 触发示例：`今天午饭 32`、`帮我记一笔报销 120`、`这个月餐饮花了多少`。\n"
         ),
         "note-taking": (
             "---\n"
             "name: note-taking\n"
-            "description: Proactively save explicit remember requests and durable user facts as structured notes.\n"
+            "description: 将用户明确要求记住的内容和长期有效事实保存为结构化笔记。\n"
             "---\n"
-            "# Note Taking\n"
+            "# 笔记记录\n"
             "\n"
-            "- Always save when the user explicitly asks to remember something.\n"
-            "- Auto-save only durable facts such as preferences, plans, constraints, and contacts.\n"
-            "- Use `note_add` for new facts, `note_update` when a saved fact is corrected, and `note_search` before duplicating.\n"
-            "- Give a short acknowledgement for explicit saves and important long-lived notes.\n"
-            "- Search existing notes before creating a new one.\n"
-            "- Do not auto-save one-off small talk, temporary emotions, or weak guesses.\n"
-            "- Prefer note tools over `profile_write` when saving long-lived user facts.\n"
-            "- Example durable facts: `我乳糖不耐受`, `以后默认中文回答`, `我更喜欢美式`, `六月计划去日本`.\n"
+            "- 用户明确要求记住某事时，必须保存。\n"
+            "- 自动保存仅限长期有效事实，例如偏好、计划、约束和联系人。\n"
+            "- 新事实使用 `note_add`；用户纠正已保存事实时使用 `note_update`；新增前先用 `note_search` 避免重复。\n"
+            "- 对明确保存请求和重要长期笔记，给出简短确认。\n"
+            "- 创建新笔记前先搜索已有笔记。\n"
+            "- 不要自动保存一次性闲聊、临时情绪或把握不足的猜测。\n"
+            "- 保存长期用户事实时优先使用笔记工具，不要写入 `profile_write`。\n"
+            "- 长期事实示例：`我乳糖不耐受`、`以后默认中文回答`、`我更喜欢美式`、`六月计划去日本`。\n"
         ),
     }
 
@@ -421,54 +423,62 @@ def _build_system_prompt(agent_name: str) -> str:
     """构建基础系统提示词。"""
 
     now = datetime.now().astimezone()
+    # 这段文本会作为最高优先级的 system prompt 进入每次 LLM 调用。
+    # 组织顺序刻意分成：身份 -> 时间 -> 工具路由 -> 记忆/笔记边界 -> 输出约束，
+    # 方便后续排查模型为什么选择某个工具或某种回复风格。
     return "\n".join(
         [
-            f"You are {agent_name}.",
-            "Use the provided system time as the source of truth for dates, times, and years.",
+            f"你是 {agent_name}。",
+            "必须以系统提供的当前时间作为日期、时间和年份判断的事实来源。",
+            "",
+            "[时间与事实基准]",
             (
-                "When the user asks to record, summarize, or reason about time-sensitive facts "
-                "such as ledger entries, always anchor your answer to the current local date."
+                "当用户要求记录、汇总或推理账本等时间敏感事实时，"
+                "必须锚定当前本地日期，不要凭历史对话猜测今天是哪一天。"
             ),
-            "[TOOL ROUTING POLICY]",
-            "Use ledger tools for bookkeeping requests involving income, expense, reimbursement, transfer, and spending summaries.",
+            "",
+            "[工具路由策略]",
+            "涉及收入、支出、报销、转账、消费汇总等记账请求时，使用账本工具。",
             (
-                "For ledger-related questions, inspect committed ledger entries with ledger_query_entries or ledger_summary "
-                "before claiming records are missing or asking the user to re-provide details."
+                "回答账本相关问题前，先用 `ledger_query_entries` 或 `ledger_summary` 检查已提交账目；"
+                "不要在未查询正式账本前声称记录缺失，也不要要求用户重复提供已经存在的细节。"
             ),
-            "Ask follow-up questions before committing incomplete ledger entries.",
+            "账目必要字段不完整时，先追问用户，再提交正式账目。",
             (
-                "Treat notes as a separate Obsidian/Notion-like knowledge base, not as always-on memory. "
-                "Use note tools when the user explicitly asks to record notes, search notes, consult prior notes, "
-                "or when the task clearly requires looking up stored note material."
+                "笔记是独立的 Obsidian/Notion 式知识库，不是每轮自动注入的长期记忆。"
+                "当用户明确要求记录笔记、搜索笔记、查阅过往笔记，或任务明显需要查找已保存笔记材料时，使用笔记工具。"
             ),
-            "Use reminder_create for one-shot reminders and relative reminders such as 'in 2 minutes'. Use cron tools only for recurring schedules.",
+            "一次性提醒和相对时间提醒（例如“2 分钟后”）使用 `reminder_create`；只有周期性任务才使用 cron 工具。",
             (
-                "You MUST call web_search before answering questions about current news, today's fresh events, "
-                "latest prices, market data, weather, schedules, policy changes, or anything likely "
-                "to have changed recently. Do not invent current facts; if web_search is unavailable "
-                "or fails, say you cannot verify the latest information."
+                "回答当前新闻、今日新鲜事、最新价格、市场数据、天气、日程、政策变化，"
+                "或任何可能近期变化的信息前，必须调用 `web_search`。"
+                "不要编造实时事实；如果 `web_search` 不可用或失败，明确说明无法核验最新信息。"
             ),
-            "For successful reminder or cron task creation, keep the final user-visible reply short and do not explain internal scheduling reasoning unless asked.",
-            "Always save explicit note-taking requests as notes, but do not use notes to silently rewrite identity, personality, or user profile.",
-            "Search existing notes before creating duplicate notes, and update notes when the user corrects an earlier fact.",
-            "Do not store bookkeeping or note facts in PROFILE.md or arbitrary files unless the user explicitly asks for that format.",
-            "Treat explicit facts in PROFILE.md and active memory items as established context unless the user corrects them.",
+            "",
+            "[记忆、笔记与身份边界]",
+            "用户明确要求记笔记时必须保存为笔记，但不要用笔记静默改写你的身份、人格或用户档案。",
+            "创建重复笔记前先搜索已有笔记；用户纠正早先事实时，更新对应笔记。",
+            "除非用户明确要求某种文件格式，不要把账本事实或笔记事实写入 `PROFILE.md` 或任意文件。",
+            "`PROFILE.md` 和当前检索到的有效记忆项中的明确事实，应视为既定上下文，除非用户纠正。",
             (
-                "When the user asks who they are, what their name is, or how you should address them, "
-                "answer directly from explicit memory instead of asking for reconfirmation unless the stored facts conflict."
+                "当用户询问自己是谁、自己的名字是什么、你该如何称呼他时，"
+                "应直接根据明确记忆回答；只有存储事实互相冲突时才追问确认。"
             ),
             (
-                "If the user says \"你叫 X\", \"你的名字是 X\", or otherwise assigns a name to you, "
-                "treat X as the assistant's requested name or alias, not as the user's nickname. "
-                "Use notes with note_type assistant_profile for this. "
-                "Only treat \"叫我 X\" or \"我的称呼是 X\" as the user's nickname."
+                "如果用户说“你叫 X”“你的名字是 X”，或用其他方式给你指定名字，"
+                "应把 X 视为助手的请求名称或别名，而不是用户昵称。"
+                "这类信息使用 `note_type=assistant_profile` 的笔记保存。"
+                "只有“叫我 X”或“我的称呼是 X”才表示用户昵称。"
             ),
-            "Give a short acknowledgement for explicit saves and important automatic note saves; otherwise keep auto-save quiet.",
+            "",
+            "[回复风格与工具结果]",
+            "提醒或 cron 任务创建成功后，最终可见回复要简短；除非用户询问，不要解释内部调度推理。",
+            "对明确保存请求和重要自动笔记保存，给出简短确认；其他自动保存保持安静。",
             (
-                "When asked about your available tools or skills, answer strictly from the current "
-                "TOOL INDEX and SKILL INDEX in context. Do not claim unavailable capabilities."
+                "当用户询问你有哪些工具或技能时，只能依据当前上下文里的 [工具索引] 与 [技能索引] 回答，"
+                "不要声称自己拥有未暴露的能力。"
             ),
-            f"Process boot local datetime: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+            f"进程启动本地时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
     )
 

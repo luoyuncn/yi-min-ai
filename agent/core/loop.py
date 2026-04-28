@@ -70,7 +70,7 @@ class AgentCore:
         shell_requires_confirmation: bool = True,
         max_iterations: int = 8,
         context_history_turns: int = 12,
-        system_prompt: str = "You are Yi Min.",
+        system_prompt: str = "你是 Yi Min。",
     ) -> None:
         # 这些依赖都在 build_app 或测试工厂中注入；
         # AgentCore 自己不负责创建它们，只负责调度它们协作。
@@ -152,6 +152,9 @@ class AgentCore:
         )
         yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
 
+        # 一个用户输入对应一个 Langfuse trace；后面的模型调用、工具调用都会挂在
+        # 这个 trace 下。这里不要做业务特判，否则会绕过统一 ReAct 链路，导致
+        # 工具选择、记忆提取和 tracing 行为不一致。
         trace_cm = self._trace_start_trace(
             "agent.run",
             input=message.body,
@@ -175,6 +178,8 @@ class AgentCore:
             )
             command = message.metadata.get("command") or {}
             if command:
+                # command 是 Web/飞书审批等“恢复执行”入口，不是普通用户新问题。
+                # 它复用同一个 run_events 外壳，但不会重新组装一轮普通对话上下文。
                 async for event in self._resume_from_command(
                     session,
                     thread_id=thread_id,
@@ -196,6 +201,8 @@ class AgentCore:
                 input={"user_message": message.body, "history_messages": len(session.history)},
                 metadata={"run_id": run_id, "trace_id": metadata.get("trace_id")},
             ) as context_span:
+                # 历史消息先裁剪再进入模型，避免长会话把旧身份、旧工具结果、
+                # 大块 tool payload 全量带回当前轮，既省 token 也减少“旧人设复活”。
                 selected_history = self._select_history_for_context(session.history, user_message=message.body)
                 context = self.context_assembler.assemble(
                     soul_text=self.always_on_memory.load_soul(),
@@ -298,6 +305,10 @@ class AgentCore:
         sender_id: str | None,
     ):
         for index in range(self.max_iterations):
+            # 每个 iteration 是一次标准 ReAct 回合：
+            # 1. 把当前 context 发给模型；
+            # 2. 如果模型直接给文本，就归档并结束；
+            # 3. 如果模型请求工具，就执行工具，把工具结果追加进 context，再进入下一轮。
             step_name = f"iteration-{index + 1}"
             message_metadata["timing_iterations"] = index + 1
             self._ensure_active(runtime_control)
@@ -316,6 +327,8 @@ class AgentCore:
                 token_count = self.context_assembler.count_context_tokens(context)
                 logger.info(f"After compaction: {token_count} tokens")
 
+            # request.tools 是模型可见的 function schema；schema 文案会影响模型
+            # 是否正确选择工具，所以工具描述尽量明确业务边界。
             request = LLMRequest(messages=context, tools=self.tool_registry.get_schemas())
             assistant_message_id = str(uuid4())
             streamed_text_parts: list[str] = []
@@ -355,6 +368,8 @@ class AgentCore:
                     self._ensure_active(runtime_control)
 
                     if chunk.type == "text_delta":
+                        # 流式文本先逐块透传给上层 gateway/web UI；最终仍以 provider
+                        # 返回的完整 response.text 为准，避免分块丢字或尾部缺失。
                         delta = chunk.delta or ""
                         if not delta:
                             continue
@@ -437,6 +452,8 @@ class AgentCore:
             )
             self._ensure_active(runtime_control)
             if response.type == "text":
+                # 普通文本回复是本轮 ReAct 的终点：归档 assistant 消息、
+                # 触发记忆提取、非阻塞写入 M-flow，然后发出 RunFinishedEvent。
                 self.react_logger.record(
                     "decision",
                     trace_id=message_metadata.get("trace_id"),
@@ -511,6 +528,8 @@ class AgentCore:
                 "content": response.text or "",
                 "tool_calls": response.tool_calls or [],
             }
+            # 工具调用请求也必须进入 session/context。下一轮模型需要看到：
+            # “我刚刚请求了哪些工具”以及“工具分别返回了什么”。
             session.append(assistant_message)
             context.append(assistant_message)
             self.react_logger.record(
@@ -541,6 +560,8 @@ class AgentCore:
                 sender=sender,
             ):
                 if isinstance(event, CustomEvent):
+                    # 例如 shell 审批会发出中断事件：当前轮先停在等待确认状态，
+                    # 不再继续让模型基于“尚未执行的工具”编造后续回答。
                     interrupted = True
                 if isinstance(event, RunErrorEvent):
                     yield event
@@ -549,6 +570,8 @@ class AgentCore:
 
             direct_text = "" if interrupted else self._build_direct_tool_response(response.tool_calls or [], context)
             if direct_text:
+                # 某些工具结果已经足够面向用户，例如 reminder_create 或 cron_list_tasks。
+                # 这些场景可以跳过第二次模型总结，降低延迟并避免模型改写关键时间/id。
                 direct_message_id = str(uuid4())
                 if message_metadata.get("timing_first_token_run_ms") is None:
                     message_metadata["timing_first_token_run_ms"] = elapsed_ms(

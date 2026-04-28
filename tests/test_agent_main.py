@@ -24,16 +24,16 @@ def test_main_handles_keyboard_interrupt_without_click_abort(monkeypatch) -> Non
 def test_system_prompt_distinguishes_assistant_name_from_user_nickname() -> None:
     prompt = _build_system_prompt("Yi Min")
 
-    assert "If the user says \"你叫 X\"" in prompt
-    assert "Obsidian/Notion-like knowledge base" in prompt
+    assert "如果用户说“你叫 X”" in prompt
+    assert "Obsidian/Notion 式知识库" in prompt
 
 
 def test_system_prompt_routes_fresh_facts_to_web_search() -> None:
     prompt = _build_system_prompt("Yi Min")
 
     assert "web_search" in prompt
-    assert "current news" in prompt
-    assert "Do not invent" in prompt
+    assert "当前新闻" in prompt
+    assert "不要编造实时事实" in prompt
 
 
 def test_workspace_init_uses_default_soul_template(tmp_path) -> None:

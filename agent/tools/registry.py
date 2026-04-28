@@ -61,7 +61,7 @@ class ToolRegistry:
     def get_index(self) -> str:
         """生成给模型阅读的工具索引。"""
 
-        lines = ["Available Tools:"]
+        lines = ["可用工具："]
         for tool in self._tools.values():
             lines.append(f"- {tool.name}: {tool.description}")
         return "\n".join(lines)
@@ -94,25 +94,28 @@ def build_stage1_registry(
     - Web 搜索
     """
 
+    # 这里注册的 description 与 schema 字段说明会原样发给 LLM。
+    # 因此业务说明统一使用中文；工具名和参数名保持英文，保证模型发起
+    # function call 时仍能匹配到 Python 侧的真实 handler。
     registry = ToolRegistry()
     root = Path(workspace_dir)
 
     registry.register(
         ToolDefinition(
             name="file_read",
-            description="Read a UTF-8 text file from the workspace.",
-            schema=_schema("file_read", "Read a text file", {"path": _string_field("Relative path")}),
+            description="读取 workspace 内的 UTF-8 文本文件。",
+            schema=_schema("file_read", "读取文本文件", {"path": _string_field("相对路径")}),
             handler=partial(file_read, root),
         )
     )
     registry.register(
         ToolDefinition(
             name="file_write",
-            description="Write a UTF-8 text file inside the workspace.",
+            description="在 workspace 内写入 UTF-8 文本文件。",
             schema=_schema(
                 "file_write",
-                "Write a text file",
-                {"path": _string_field("Relative path"), "content": _string_field("Text content")},
+                "写入文本文件",
+                {"path": _string_field("相对路径"), "content": _string_field("文本内容")},
             ),
             handler=partial(file_write, root),
         )
@@ -120,21 +123,21 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="ledger_upsert_draft",
-            description="Create or update the active ledger draft for one thread.",
+            description="创建或更新当前会话线程里的活跃账本草稿。",
             schema=_schema(
                 "ledger_upsert_draft",
-                "Create or update one ledger draft",
+                "创建或更新一条账本草稿",
                 {
-                    "thread_id": _string_field("Runtime-scoped thread id"),
-                    "source_message_id": _optional_string_field("Source message id"),
-                    "direction": _optional_string_field("income or expense"),
-                    "amount_cent": _optional_integer_field("Amount in cents"),
-                    "currency": _optional_string_field("Currency code, default CNY"),
-                    "category": _optional_string_field("Category such as meal or salary"),
-                    "occurred_at": _optional_string_field("Occurrence datetime in ISO 8601"),
-                    "merchant": _optional_string_field("Merchant or counterparty"),
-                    "note": _optional_string_field("Freeform note"),
-                    "missing_fields": _array_field("List of still-missing required fields"),
+                    "thread_id": _string_field("带运行时命名空间的线程 id"),
+                    "source_message_id": _optional_string_field("来源消息 id"),
+                    "direction": _optional_string_field("收入 income 或支出 expense"),
+                    "amount_cent": _optional_integer_field("金额，单位为分"),
+                    "currency": _optional_string_field("币种代码，默认 CNY"),
+                    "category": _optional_string_field("分类，例如 meal 或 salary"),
+                    "occurred_at": _optional_string_field("发生时间，ISO 8601 格式"),
+                    "merchant": _optional_string_field("商家或交易对方"),
+                    "note": _optional_string_field("自由备注"),
+                    "missing_fields": _array_field("仍缺失的必要字段列表"),
                 },
                 required=["thread_id"],
             ),
@@ -144,11 +147,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="ledger_get_active_draft",
-            description="Read the active ledger draft for one thread.",
+            description="读取当前会话线程里的活跃账本草稿。",
             schema=_schema(
                 "ledger_get_active_draft",
-                "Read one ledger draft",
-                {"thread_id": _string_field("Runtime-scoped thread id")},
+                "读取一条账本草稿",
+                {"thread_id": _string_field("带运行时命名空间的线程 id")},
             ),
             handler=partial(ledger_get_active_draft, ledger_store),
         )
@@ -156,11 +159,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="ledger_commit_draft",
-            description="Commit a complete ledger draft into the ledger.",
+            description="把字段完整的账本草稿提交为正式账目。",
             schema=_schema(
                 "ledger_commit_draft",
-                "Commit one ledger draft",
-                {"thread_id": _string_field("Runtime-scoped thread id")},
+                "提交一条账本草稿",
+                {"thread_id": _string_field("带运行时命名空间的线程 id")},
             ),
             handler=partial(ledger_commit_draft, ledger_store),
         )
@@ -168,17 +171,17 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="ledger_query_entries",
-            description="Query committed ledger entries.",
+            description="查询已经提交的正式账目。",
             schema=_schema(
                 "ledger_query_entries",
-                "Query ledger entries",
+                "查询账目",
                 {
-                    "direction": _optional_string_field("income or expense"),
-                    "category": _optional_string_field("Category filter"),
-                    "source_thread_id": _optional_string_field("Optional source thread filter"),
-                    "occurred_from": _optional_string_field("Inclusive ISO datetime lower bound"),
-                    "occurred_to": _optional_string_field("Exclusive ISO datetime upper bound"),
-                    "limit": _integer_field("Result limit"),
+                    "direction": _optional_string_field("收入 income 或支出 expense"),
+                    "category": _optional_string_field("分类过滤条件"),
+                    "source_thread_id": _optional_string_field("可选的来源线程过滤条件"),
+                    "occurred_from": _optional_string_field("发生时间下界，ISO 格式，包含该时间"),
+                    "occurred_to": _optional_string_field("发生时间上界，ISO 格式，不包含该时间"),
+                    "limit": _integer_field("结果数量上限"),
                 },
                 required=["limit"],
             ),
@@ -188,15 +191,15 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="ledger_summary",
-            description="Summarize committed ledger entries.",
+            description="汇总已经提交的正式账目。",
             schema=_schema(
                 "ledger_summary",
-                "Summarize ledger entries",
+                "汇总账目",
                 {
-                    "category": _optional_string_field("Category filter"),
-                    "source_thread_id": _optional_string_field("Optional source thread filter"),
-                    "occurred_from": _optional_string_field("Inclusive ISO datetime lower bound"),
-                    "occurred_to": _optional_string_field("Exclusive ISO datetime upper bound"),
+                    "category": _optional_string_field("分类过滤条件"),
+                    "source_thread_id": _optional_string_field("可选的来源线程过滤条件"),
+                    "occurred_from": _optional_string_field("发生时间下界，ISO 格式，包含该时间"),
+                    "occurred_to": _optional_string_field("发生时间上界，ISO 格式，不包含该时间"),
                 },
                 required=[],
             ),
@@ -206,19 +209,19 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="profile_write",
-            description="Replace PROFILE.md content for the next turn.",
-            schema=_schema("profile_write", "Replace PROFILE.md", {"content": _string_field("Profile content")}),
+            description="替换 `PROFILE.md` 内容，并在下一轮对话生效。",
+            schema=_schema("profile_write", "替换 PROFILE.md", {"content": _string_field("用户档案内容")}),
             handler=partial(profile_write, always_on_memory),
         )
     )
     registry.register(
         ToolDefinition(
             name="memory_search",
-            description="Search auditable durable memories.",
+            description="搜索可审计的长期记忆。",
             schema=_schema(
                 "memory_search",
-                "Search durable memories",
-                {"query": _string_field("Search query"), "limit": _integer_field("Result limit")},
+                "搜索长期记忆",
+                {"query": _string_field("搜索关键词"), "limit": _integer_field("结果数量上限")},
             ),
             handler=partial(memory_search, memory_store),
         )
@@ -226,11 +229,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="memory_list_recent",
-            description="List recent auditable durable memories.",
+            description="列出最近的可审计长期记忆。",
             schema=_schema(
                 "memory_list_recent",
-                "List recent durable memories",
-                {"limit": _integer_field("Result limit")},
+                "列出最近长期记忆",
+                {"limit": _integer_field("结果数量上限")},
             ),
             handler=partial(memory_list_recent, memory_store),
         )
@@ -238,11 +241,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="memory_forget",
-            description="Mark one durable memory item obsolete.",
+            description="将一条长期记忆标记为过时。",
             schema=_schema(
                 "memory_forget",
-                "Forget one durable memory",
-                {"memory_id": _string_field("Memory id")},
+                "遗忘一条长期记忆",
+                {"memory_id": _string_field("记忆 id")},
             ),
             handler=partial(memory_forget, memory_store),
         )
@@ -250,11 +253,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="search_sessions",
-            description="Search archived session content in SQLite.",
+            description="在 SQLite 会话归档中搜索历史对话内容。",
             schema=_schema(
                 "search_sessions",
-                "Search archived sessions",
-                {"query": _string_field("Search query"), "limit": _integer_field("Result limit")},
+                "搜索会话归档",
+                {"query": _string_field("搜索关键词"), "limit": _integer_field("结果数量上限")},
             ),
             handler=partial(search_sessions, session_archive),
         )
@@ -262,18 +265,18 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="note_add",
-            description="Create one long-lived note.",
+            description="创建一条长期笔记。",
             schema=_schema(
                 "note_add",
-                "Create one note",
+                "创建笔记",
                 {
-                    "note_type": _string_field("Note type such as preference or plan"),
-                    "title": _string_field("Short note title"),
-                    "content": _string_field("Full note content"),
-                    "importance": _string_field("low, medium, or high"),
-                    "is_user_explicit": _boolean_field("Whether the user explicitly asked to save it"),
-                    "source_message_id": _optional_string_field("Source message id"),
-                    "source_thread_id": _optional_string_field("Source thread id"),
+                    "note_type": _string_field("笔记类型，例如 preference 或 plan"),
+                    "title": _string_field("简短标题"),
+                    "content": _string_field("完整笔记内容"),
+                    "importance": _string_field("重要性：low、medium 或 high"),
+                    "is_user_explicit": _boolean_field("用户是否明确要求保存"),
+                    "source_message_id": _optional_string_field("来源消息 id"),
+                    "source_thread_id": _optional_string_field("来源线程 id"),
                 },
                 required=["note_type", "title", "content", "importance", "is_user_explicit"],
             ),
@@ -283,13 +286,13 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="note_search",
-            description="Search saved long-lived notes.",
+            description="搜索已保存的长期笔记。",
             schema=_schema(
                 "note_search",
-                "Search notes",
+                "搜索笔记",
                 {
-                    "query": _string_field("Search query"),
-                    "limit": _integer_field("Result limit"),
+                    "query": _string_field("搜索关键词"),
+                    "limit": _integer_field("结果数量上限"),
                 },
             ),
             handler=partial(note_search, note_store),
@@ -298,11 +301,11 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="note_list_recent",
-            description="List the most recently updated notes.",
+            description="列出最近更新的笔记。",
             schema=_schema(
                 "note_list_recent",
-                "List recent notes",
-                {"limit": _integer_field("Result limit")},
+                "列出最近笔记",
+                {"limit": _integer_field("结果数量上限")},
             ),
             handler=partial(note_list_recent, note_store),
         )
@@ -310,15 +313,15 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="note_update",
-            description="Update an existing note in place.",
+            description="原地更新一条已有笔记。",
             schema=_schema(
                 "note_update",
-                "Update one note",
+                "更新笔记",
                 {
-                    "note_id": _string_field("Existing note id"),
-                    "title": _string_field("Updated title"),
-                    "content": _string_field("Updated content"),
-                    "importance": _string_field("Updated importance"),
+                    "note_id": _string_field("已有笔记 id"),
+                    "title": _string_field("更新后的标题"),
+                    "content": _string_field("更新后的内容"),
+                    "importance": _string_field("更新后的重要性"),
                 },
             ),
             handler=partial(note_update, note_store),
@@ -328,8 +331,8 @@ def build_stage1_registry(
     registry.register(
         ToolDefinition(
             name="read_skill",
-            description="Read the full content of one skill by name.",
-            schema=_schema("read_skill", "Read one skill", {"skill_name": _string_field("Skill name")}),
+            description="按名称读取一个 skill 的完整内容。",
+            schema=_schema("read_skill", "读取一个 skill", {"skill_name": _string_field("skill 名称")}),
             handler=partial(read_skill, skill_loader),
         )
     )
@@ -338,19 +341,19 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="cron_create_task",
-                description="Create a cron task that becomes active immediately and persists to CRON.yaml.",
+                description="创建一个立即生效并持久化到 `CRON.yaml` 的 cron 任务。",
                 schema=_schema(
                     "cron_create_task",
-                    "Create live cron task",
+                    "创建热生效 cron 任务",
                     {
-                        "name": _string_field("Task name"),
-                        "schedule": _string_field("Cron expression, e.g. 0 9 * * *"),
-                        "prompt": _string_field("Prompt to run when the task fires"),
-                        "timezone": _string_field("IANA timezone, e.g. Asia/Shanghai"),
-                        "description": _optional_string_field("Task description"),
-                        "output_channel": _optional_string_field("Output channel, default current channel"),
-                        "output_session_id": _optional_string_field("Output session id, default current session"),
-                        "enabled": _boolean_field("Whether the task is enabled"),
+                        "name": _string_field("任务名称"),
+                        "schedule": _string_field("cron 表达式，例如 0 9 * * *"),
+                        "prompt": _string_field("任务触发时要执行的提示词"),
+                        "timezone": _string_field("IANA 时区，例如 Asia/Shanghai"),
+                        "description": _optional_string_field("任务描述"),
+                        "output_channel": _optional_string_field("输出渠道，默认当前渠道"),
+                        "output_session_id": _optional_string_field("输出会话 id，默认当前会话"),
+                        "enabled": _boolean_field("任务是否启用"),
                     },
                     required=["name", "schedule", "prompt", "timezone", "enabled"],
                 ),
@@ -361,20 +364,20 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="cron_update_task",
-                description="Update a live cron task and persist it to CRON.yaml.",
+                description="更新一个热生效 cron 任务，并持久化到 `CRON.yaml`。",
                 schema=_schema(
                     "cron_update_task",
-                    "Update live cron task",
+                    "更新热生效 cron 任务",
                     {
-                        "task_id": _string_field("Existing task id"),
-                        "name": _string_field("Task name"),
-                        "schedule": _string_field("Cron expression"),
-                        "prompt": _string_field("Prompt to run when the task fires"),
-                        "timezone": _string_field("IANA timezone"),
-                        "description": _optional_string_field("Task description"),
-                        "output_channel": _optional_string_field("Output channel"),
-                        "output_session_id": _optional_string_field("Output session id"),
-                        "enabled": _boolean_field("Whether the task is enabled"),
+                        "task_id": _string_field("已有任务 id"),
+                        "name": _string_field("任务名称"),
+                        "schedule": _string_field("cron 表达式"),
+                        "prompt": _string_field("任务触发时要执行的提示词"),
+                        "timezone": _string_field("IANA 时区"),
+                        "description": _optional_string_field("任务描述"),
+                        "output_channel": _optional_string_field("输出渠道"),
+                        "output_session_id": _optional_string_field("输出会话 id"),
+                        "enabled": _boolean_field("任务是否启用"),
                     },
                     required=["task_id", "name", "schedule", "prompt", "timezone", "enabled"],
                 ),
@@ -385,8 +388,8 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="cron_list_tasks",
-                description="List live cron tasks with next run and last run ids.",
-                schema=_schema("cron_list_tasks", "List live cron tasks", {}, required=[]),
+                description="列出热生效 cron 任务，包括下次运行时间和最近运行 id。",
+                schema=_schema("cron_list_tasks", "列出热生效 cron 任务", {}, required=[]),
                 handler=partial(cron_list_tasks, runtime_services),
                 accepts_context=True,
             )
@@ -394,11 +397,11 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="cron_delete_task",
-                description="Delete a live cron task and persist CRON.yaml.",
+                description="删除一个热生效 cron 任务，并持久化 `CRON.yaml`。",
                 schema=_schema(
                     "cron_delete_task",
-                    "Delete live cron task",
-                    {"task_id": _string_field("Task id")},
+                    "删除热生效 cron 任务",
+                    {"task_id": _string_field("任务 id")},
                 ),
                 handler=partial(cron_delete_task, runtime_services),
                 accepts_context=True,
@@ -407,11 +410,11 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="cron_run_now",
-                description="Trigger one cron task immediately and return the generated run id.",
+                description="立即触发一个 cron 任务，并返回本次执行生成的 run id。",
                 schema=_schema(
                     "cron_run_now",
-                    "Run live cron task now",
-                    {"task_id": _string_field("Task id")},
+                    "立即运行 cron 任务",
+                    {"task_id": _string_field("任务 id")},
                 ),
                 handler=partial(cron_run_now, runtime_services),
                 accepts_context=True,
@@ -421,8 +424,8 @@ def build_stage1_registry(
             ToolDefinition(
                 name="reminder_create",
                 description=(
-                    "Create a one-shot reminder. Use this for relative or absolute reminders such as "
-                    "'in 2 minutes', 'today at 12:39', or 'tomorrow morning'. Prefer delay_seconds for relative times."
+                    "创建一次性提醒。相对或绝对时间提醒都使用此工具，例如“2 分钟后”、"
+                    "“今天 12:39”或“明天早上”。相对时间优先使用 `delay_seconds`。"
                 ),
                 schema=_reminder_create_schema(),
                 handler=partial(reminder_create, runtime_services),
@@ -432,8 +435,8 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="reminder_list",
-                description="List one-shot reminders with due time, status, and last run id.",
-                schema=_schema("reminder_list", "List one-shot reminders", {}, required=[]),
+                description="列出一次性提醒，包括执行时间、状态和最近运行 id。",
+                schema=_schema("reminder_list", "列出一次性提醒", {}, required=[]),
                 handler=partial(reminder_list, runtime_services),
                 accepts_context=True,
             )
@@ -441,11 +444,11 @@ def build_stage1_registry(
         registry.register(
             ToolDefinition(
                 name="reminder_delete",
-                description="Delete one one-shot reminder and persist REMINDERS.yaml.",
+                description="删除一个一次性提醒，并持久化 `REMINDERS.yaml`。",
                 schema=_schema(
                     "reminder_delete",
-                    "Delete one-shot reminder",
-                    {"reminder_id": _string_field("Reminder id")},
+                    "删除一次性提醒",
+                    {"reminder_id": _string_field("提醒 id")},
                 ),
                 handler=partial(reminder_delete, runtime_services),
                 accepts_context=True,
@@ -458,16 +461,16 @@ def build_stage1_registry(
             ToolDefinition(
                 name="recall_memory",
                 description=(
-                    "Deep memory retrieval using M-flow graph routing. "
-                    "Use for complex questions requiring causal reasoning or cross-session associations. "
-                    "Example: 'Why did I decide not to use Redis last week?'"
+                    "使用 M-flow 图路由进行深度记忆检索。"
+                    "适用于需要因果推理或跨会话关联的复杂问题。"
+                    "示例：`我上周为什么决定不用 Redis？`"
                 ),
                 schema=_schema(
                     "recall_memory",
-                    "Graph-routed deep memory retrieval",
+                    "图路由深度记忆检索",
                     {
-                        "question": _string_field("Question to search for"),
-                        "top_k": _integer_field("Number of episodes to return (default 3)"),
+                        "question": _string_field("要检索的问题"),
+                        "top_k": _integer_field("返回的片段数量，默认 3"),
                     },
                 ),
                 handler=partial(recall_memory, mflow_bridge),
@@ -480,15 +483,15 @@ def build_stage1_registry(
             ToolDefinition(
                 name="shell_exec",
                 description=(
-                    "Execute a shell command in the workspace directory. "
-                    "**REQUIRES APPROVAL**. Use for running scripts, system commands, etc."
+                    "在 workspace 目录中执行 shell 命令。"
+                    "**需要审批**。用于运行脚本、系统命令等。"
                 ),
                 schema=_schema(
                     "shell_exec",
-                    "Execute shell command",
+                    "执行 shell 命令",
                     {
-                        "command": _string_field("Shell command to execute"),
-                        "timeout": _integer_field("Timeout in seconds (default 30)"),
+                        "command": _string_field("要执行的 shell 命令"),
+                        "timeout": _integer_field("超时时间，单位秒，默认 30"),
                     },
                 ),
                 handler=partial(shell_exec, root),
@@ -501,15 +504,14 @@ def build_stage1_registry(
             ToolDefinition(
                 name="web_search",
                 description=(
-                    "Search the web using DuckDuckGo. "
-                    "Returns titles, snippets, and URLs."
+                    "使用 DuckDuckGo 搜索网页，返回标题、摘要和 URL。"
                 ),
                 schema=_schema(
                     "web_search",
-                    "Web search",
+                    "网页搜索",
                     {
-                        "query": _string_field("Search query"),
-                        "num_results": _integer_field("Number of results (default 5)"),
+                        "query": _string_field("搜索关键词"),
+                        "num_results": _integer_field("结果数量，默认 5"),
                     },
                 ),
                 handler=web_search,
@@ -540,15 +542,15 @@ def _schema(name: str, description: str, properties: dict, required: list[str] |
 def _reminder_create_schema() -> dict:
     schema = _schema(
         "reminder_create",
-        "Create one-shot reminder",
+        "创建一次性提醒",
         {
-            "title": _string_field("Short reminder title"),
-            "message": _string_field("Reminder text to send when due"),
-            "run_at": _optional_string_field("Absolute ISO 8601 datetime. Use null when using delay_seconds."),
-            "delay_seconds": _optional_integer_field("Relative delay in seconds, e.g. 300 for five minutes."),
-            "timezone": _string_field("IANA timezone for naive run_at values, e.g. Asia/Shanghai"),
-            "output_channel": _optional_string_field("Output channel, default current channel"),
-            "output_session_id": _optional_string_field("Output session id, default current session"),
+            "title": _string_field("简短提醒标题"),
+            "message": _string_field("到期时发送的提醒文本"),
+            "run_at": _optional_string_field("绝对执行时间，ISO 8601 格式。使用 delay_seconds 时传 null。"),
+            "delay_seconds": _optional_integer_field("相对延迟秒数，例如 300 表示五分钟后。"),
+            "timezone": _string_field("用于解析无时区 run_at 的 IANA 时区，例如 Asia/Shanghai"),
+            "output_channel": _optional_string_field("输出渠道，默认当前渠道"),
+            "output_session_id": _optional_string_field("输出会话 id，默认当前会话"),
         },
         required=["title", "message", "timezone"],
     )

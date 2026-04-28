@@ -18,7 +18,7 @@ class SkillLoader:
     def get_index(self) -> str:
         """扫描 skills 目录，生成给模型看的紧凑索引。"""
 
-        lines = ["Available Skills:"]
+        lines = ["可用技能："]
         for skill_file in sorted(self.skills_dir.glob("*/SKILL.md")):
             metadata = _parse_frontmatter(skill_file.read_text(encoding="utf-8"))
             name = metadata.get("name", skill_file.parent.name)

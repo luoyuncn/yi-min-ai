@@ -73,7 +73,74 @@ sudo YIMIN_UV_NATIVE_TLS=true ./scripts/install_linux.sh
 4. 根据权限写入用户态或 system 级 service
 5. 注册并启动 `yimin` 服务
 
-## 3. 生命周期命令
+## 3. 启动两个独立服务
+
+如果要给不同的人各跑一个单主体 Agent，推荐使用两份项目目录，每份项目有自己的 `.env`、`workspace/` 和 systemd service。安装时用不同的 `--service-name` 区分即可。
+
+示例：启动两套 system 级服务。
+
+```bash
+# 第一套
+cd /home/alice/yi-min-ai
+cp .env.example .env
+vim .env
+sudo ./scripts/install_linux.sh --service-name yimin-alice
+```
+
+```bash
+# 第二套
+cd /home/bob/yi-min-ai
+cp .env.example .env
+vim .env
+sudo ./scripts/install_linux.sh --service-name yimin-bob
+```
+
+这样会得到两套互相隔离的运行态数据：
+
+```text
+/home/alice/yi-min-ai/.env
+/home/alice/yi-min-ai/workspace/
+/etc/systemd/system/yimin-alice.service
+
+/home/bob/yi-min-ai/.env
+/home/bob/yi-min-ai/workspace/
+/etc/systemd/system/yimin-bob.service
+```
+
+管理服务时带上对应 service name：
+
+```bash
+sudo yimin status --service-name yimin-alice
+sudo yimin logs --service-name yimin-alice
+sudo yimin restart --service-name yimin-alice
+```
+
+```bash
+sudo yimin status --service-name yimin-bob
+sudo yimin logs --service-name yimin-bob
+sudo yimin restart --service-name yimin-bob
+```
+
+升级某一套实例时，进入对应项目目录操作：
+
+```bash
+cd /home/alice/yi-min-ai
+git pull
+uv sync
+sudo yimin restart --service-name yimin-alice
+```
+
+注意：安装第二套时，`/usr/local/bin/yimin` 这个快捷命令会被更新为指向后安装的项目目录；这不影响已经安装好的 service，因为 service 文件里写入的是各自的 `WorkingDirectory` 和启动脚本路径。如果要重新安装某一套实例，回到那套项目目录执行 `sudo ./scripts/install_linux.sh --service-name ...`。
+
+用户态 service 也支持同样方式，只是不加 `sudo`：
+
+```bash
+./scripts/install_linux.sh --service-name yimin-alice
+./scripts/install_linux.sh --service-name yimin-bob
+yimin status --service-name yimin-alice
+```
+
+## 4. 生命周期命令
 
 用户态：
 
@@ -110,10 +177,10 @@ sudo ./scripts/yimin install --scope system --service-user "$USER"
 卸载：
 
 ```bash
-./scripts/yimin uninstall
+./scripts/yimin uninstall --service-name yimin-alice
 ```
 
-## 4. 数据目录
+## 5. 数据目录
 
 Linux 部署固定把运行态数据写在当前仓库目录里：
 
@@ -131,7 +198,9 @@ mkdir -p workspace
 cp workspace-main/MEMORY.md workspace/MEMORY.md
 ```
 
-## 5. 为什么这样更安全
+如果启动多个服务，每份项目目录都有自己的 `workspace/`。不要让两套服务共用同一个项目目录和同一个 `workspace/`，否则记忆、账本、提醒、定时任务都会混在一起。
+
+## 6. 为什么这样更安全
 
 代码目录仍然由 Git 管理，但运行态数据不在 Git 跟踪范围内：
 
@@ -145,10 +214,10 @@ cp workspace-main/MEMORY.md workspace/MEMORY.md
 ```bash
 git pull
 uv sync
-yimin restart
+yimin restart --service-name yimin-alice
 ```
 
-## 6. 日志与排障
+## 7. 日志与排障
 
 查看 service 日志：
 
@@ -180,13 +249,20 @@ system 级：
 sudo yimin status
 ```
 
+多服务场景下指定 service name：
+
+```bash
+sudo journalctl -u yimin-alice -f
+sudo journalctl -u yimin-bob -f
+```
+
 如果用户态 service 在退出登录后不会继续运行，执行：
 
 ```bash
 loginctl enable-linger "$USER"
 ```
 
-## 7. 额外说明
+## 8. 额外说明
 
 - 当前仓库默认的 `config/agent.yaml` 更适合本地开发
 - 生产建议用 `config/agent.linux.yaml`
