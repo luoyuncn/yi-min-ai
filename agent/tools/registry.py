@@ -14,6 +14,15 @@ from agent.tools.builtin.cron_tools import (
     cron_run_now,
     cron_update_task,
 )
+from agent.tools.builtin.fitness_tools import (
+    fitness_audit_recent,
+    fitness_profile_get,
+    fitness_profile_update,
+    fitness_settings_get,
+    fitness_settings_update,
+    fitness_workout_append,
+    fitness_workout_recent,
+)
 from agent.tools.builtin.file_ops import file_read, file_write
 from agent.tools.builtin.ledger_tools import (
     ledger_commit_draft,
@@ -118,6 +127,133 @@ def build_stage1_registry(
                 {"path": _string_field("相对路径"), "content": _string_field("文本内容")},
             ),
             handler=partial(file_write, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_profile_get",
+            description="读取 fitness 训练档案与教练设定。",
+            schema=_schema("fitness_profile_get", "读取健身档案", {}, required=[]),
+            handler=partial(fitness_profile_get, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_profile_update",
+            description="更新 fitness 训练档案与教练设定，并记录审计日志。",
+            schema=_schema(
+                "fitness_profile_update",
+                "更新健身档案",
+                {
+                    "name": _optional_string_field("用户称呼"),
+                    "age": _optional_integer_field("年龄"),
+                    "height_cm": _optional_integer_field("身高（cm）"),
+                    "weight_kg": _optional_integer_field("体重（kg）"),
+                    "goal": _optional_string_field("训练目标"),
+                    "level": _optional_string_field("训练水平"),
+                    "equipment": _optional_string_field("器械条件"),
+                    "schedule": _optional_string_field("训练频率或排期"),
+                    "preferred_time": _optional_string_field("常用训练时段"),
+                    "injuries": _optional_string_field("伤病史"),
+                    "movement_restrictions": _optional_string_field("动作限制"),
+                    "plan_style": _optional_string_field("计划类型"),
+                    "current_program_notes": _optional_string_field("当前计划备注"),
+                    "primary_coach": _optional_string_field("主教练体系"),
+                    "coach_mix_rules": _optional_string_field("混搭规则"),
+                    "tone_style": _optional_string_field("教练语气"),
+                    "explanation_depth": _optional_string_field("讲解深度"),
+                    "encouragement_level": _optional_string_field("鼓励强度"),
+                    "interaction_mode": _optional_string_field("互动模式"),
+                },
+                required=[],
+            ),
+            handler=partial(fitness_profile_update, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_settings_get",
+            description="读取 fitness 的 RPG 与世界设定。",
+            schema=_schema("fitness_settings_get", "读取健身设定", {}, required=[]),
+            handler=partial(fitness_settings_get, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_settings_update",
+            description="更新 fitness 的 RPG 与世界设定，并记录审计日志。",
+            schema=_schema(
+                "fitness_settings_update",
+                "更新健身设定",
+                {
+                    "rpg_enabled": _optional_boolean_field("是否开启 RPG"),
+                    "story_density": _optional_string_field("剧情浓度"),
+                    "pre_battle_narration": _optional_boolean_field("战前叙事开关"),
+                    "post_battle_narration": _optional_boolean_field("战后叙事开关"),
+                    "attribute_display": _optional_boolean_field("属性展示开关"),
+                    "title_style": _optional_string_field("头衔风格"),
+                    "world_mode": _optional_string_field("世界模式"),
+                    "world_name": _optional_string_field("世界名称"),
+                    "protagonist_mode": _optional_string_field("主角模式"),
+                    "identity_role": _optional_string_field("身份定位"),
+                    "core_drive": _optional_string_field("核心驱动力"),
+                },
+                required=[],
+            ),
+            handler=partial(fitness_settings_update, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_workout_append",
+            description="追加一条健身训练记录，并记录审计日志。",
+            schema=_schema(
+                "fitness_workout_append",
+                "追加健身训练记录",
+                {
+                    "title": _string_field("训练标题"),
+                    "exercises": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "动作列表，每项可包含重量、次数、组数等",
+                    },
+                    "duration_minutes": _optional_integer_field("训练时长，分钟"),
+                    "rpe": _optional_integer_field("主观强度 1-10"),
+                    "readiness": _optional_string_field("训练前状态"),
+                    "notes": _optional_string_field("训练笔记"),
+                    "occurred_at": _optional_string_field("训练时间，ISO 8601"),
+                    "source_thread_id": _optional_string_field("来源线程 id"),
+                    "source_message_id": _optional_string_field("来源消息 id"),
+                },
+                required=["title", "exercises"],
+            ),
+            handler=partial(fitness_workout_append, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_workout_recent",
+            description="查看最近的健身训练记录。",
+            schema=_schema(
+                "fitness_workout_recent",
+                "查看最近训练记录",
+                {"limit": _integer_field("结果数量上限")},
+                required=["limit"],
+            ),
+            handler=partial(fitness_workout_recent, root),
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="fitness_audit_recent",
+            description="查看最近的健身档案与训练审计日志。",
+            schema=_schema(
+                "fitness_audit_recent",
+                "查看健身审计日志",
+                {"limit": _integer_field("结果数量上限")},
+                required=["limit"],
+            ),
+            handler=partial(fitness_audit_recent, root),
         )
     )
     registry.register(
@@ -579,6 +715,10 @@ def _optional_string_field(description: str) -> dict:
 
 def _optional_integer_field(description: str) -> dict:
     return {"type": ["integer", "null"], "description": description}
+
+
+def _optional_boolean_field(description: str) -> dict:
+    return {"type": ["boolean", "null"], "description": description}
 
 
 def _boolean_field(description: str) -> dict:

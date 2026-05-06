@@ -468,6 +468,8 @@ def test_build_app_scaffolds_default_workspace_skills(tmp_path: Path) -> None:
     assert "fitness-coach" in fitness_coach_text
     assert "专业、鼓励、数据驱动的个人健身教练" in fitness_coach_text
     assert "剧情模式" in fitness_coach_text
+    assert "fitness_profile_get" in fitness_coach_text
+    assert "fitness_workout_append" in fitness_coach_text
     assert "风痕原野" in fitness_coach_world_text
     assert "skill-creator" in skill_creator_text
     assert "workspace/skills/<skill-name>/" in skill_creator_text
@@ -511,6 +513,53 @@ def test_build_app_scaffolds_scheduler_templates(tmp_path: Path) -> None:
     assert cron_file.exists()
     assert "HEARTBEAT_OK" in heartbeat_file.read_text(encoding="utf-8")
     assert "tasks:" in cron_file.read_text(encoding="utf-8")
+
+
+def test_build_app_scaffolds_fitness_workspace_files(tmp_path: Path) -> None:
+    """新 workspace 应自动生成 fitness 文件系统骨架。"""
+
+    config_dir = tmp_path / "config"
+    workspace = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: gpt-5\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: gpt-5\n"
+        "    type: openai\n"
+        "    model: gpt-5.4\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    build_app(config_path=config_dir / "agent.yaml", testing=True)
+
+    profile_file = workspace / "fitness" / "PROFILE.json"
+    settings_file = workspace / "fitness" / "SETTINGS.json"
+    plan_file = workspace / "fitness" / "PLAN.md"
+    story_file = workspace / "fitness" / "STORY.md"
+    world_file = workspace / "fitness" / "WORLD.md"
+    audit_file = workspace / "fitness" / "audit" / "events.ndjson"
+
+    assert profile_file.exists()
+    assert settings_file.exists()
+    assert plan_file.exists()
+    assert story_file.exists()
+    assert world_file.exists()
+    assert audit_file.exists()
+    assert "training_profile" in profile_file.read_text(encoding="utf-8")
+    assert "rpg" in settings_file.read_text(encoding="utf-8")
+    assert "风痕原野" in world_file.read_text(encoding="utf-8")
 
 
 def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> None:

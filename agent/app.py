@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from agent.config import load_environment_files, load_settings
 from agent.core.loop import AgentCore
+from agent.fitness import FitnessFileStore
 from agent.core.llm_factory import LLMFactory
 from agent.core.provider import LLMResponse
 from agent.core.provider_manager import ProviderManager
@@ -373,6 +374,7 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
         if not target.exists():
             target.write_text(content, encoding="utf-8")
     _ensure_default_skills(workspace_dir / "skills")
+    _ensure_fitness_workspace(workspace_dir)
 
 
 def _ensure_default_skills(skills_dir: Path) -> None:
@@ -387,6 +389,12 @@ def _ensure_default_skills(skills_dir: Path) -> None:
         if target.exists():
             continue
         shutil.copytree(template_dir, target)
+
+
+def _ensure_fitness_workspace(workspace_dir: Path) -> None:
+    """确保工作区里存在 fitness 领域的文件系统骨架。"""
+
+    FitnessFileStore(workspace_dir)
 
 
 def _build_system_prompt(agent_name: str) -> str:

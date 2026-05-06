@@ -47,6 +47,20 @@ description: 专业、鼓励、数据驱动的个人健身教练。仅在健身�
 - `references/narrative-templates.md`
 - `references/rpg-themes.md`
 
+## 工具优先级
+
+涉及健身领域的结构化读写时，优先使用专用工具，而不是直接改原始文件：
+
+- 读取档案：`fitness_profile_get`
+- 更新档案：`fitness_profile_update`
+- 读取设定：`fitness_settings_get`
+- 更新设定：`fitness_settings_update`
+- 追加训练记录：`fitness_workout_append`
+- 查看最近训练：`fitness_workout_recent`
+- 查看追溯日志：`fitness_audit_recent`
+
+只有在专用工具无法覆盖的情况下，才退回到普通文件读取。
+
 ## 初始化流程
 
 1. 收集基础身体信息、目标、训练水平、器械条件、训练频率、伤病史。
@@ -59,7 +73,7 @@ description: 专业、鼓励、数据驱动的个人健身教练。仅在健身�
 
 ### 训练前
 
-- 读取训练档案与最近记录
+- 使用 `fitness_profile_get` 与 `fitness_workout_recent` 读取训练档案与最近记录
 - 判断是否是中断恢复场景
 - 按目标、器械、伤病和计划类型生成建议
 - 如剧情模式开启，仅给 1 段简短战前引导
@@ -73,7 +87,7 @@ description: 专业、鼓励、数据驱动的个人健身教练。仅在健身�
 ### 训练后
 
 - 输出训练复盘
-- 更新训练记录与等级进度
+- 使用 `fitness_workout_append` 更新训练记录与等级进度
 - 记录主观反馈
 - 给 1 段简短战后叙事
 
@@ -92,7 +106,7 @@ description: 专业、鼓励、数据驱动的个人健身教练。仅在健身�
 
 ### 正式设定
 
-以下内容在复述确认后写入档案：
+以下内容在复述确认后，使用 `fitness_profile_update` 或 `fitness_settings_update` 写入档案：
 
 - 长期目标
 - 训练分化
@@ -109,4 +123,3 @@ description: 专业、鼓励、数据驱动的个人健身教练。仅在健身�
 - 历史成绩
 - 既有伤病事实
 - 已锁定剧情事实
-

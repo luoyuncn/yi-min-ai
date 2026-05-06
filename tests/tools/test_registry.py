@@ -16,6 +16,13 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
     assert set(registry.names()) == {
         "file_read",
         "file_write",
+        "fitness_profile_get",
+        "fitness_profile_update",
+        "fitness_settings_get",
+        "fitness_settings_update",
+        "fitness_workout_append",
+        "fitness_workout_recent",
+        "fitness_audit_recent",
         "ledger_commit_draft",
         "ledger_get_active_draft",
         "ledger_query_entries",
@@ -48,6 +55,7 @@ def test_stage1_registry_can_render_tool_index(tmp_path) -> None:
     tool_index = registry.get_index()
 
     assert tool_index.startswith("可用工具：")
+    assert "- fitness_profile_get:" in tool_index
     assert "- ledger_upsert_draft:" in tool_index
     assert "- note_add:" in tool_index
     assert "- web_search:" in tool_index
