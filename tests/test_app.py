@@ -431,6 +431,9 @@ def test_build_app_scaffolds_default_workspace_skills(tmp_path: Path) -> None:
     bookkeeping_skill = workspace / "skills" / "bookkeeping" / "SKILL.md"
     note_taking_skill = workspace / "skills" / "note-taking" / "SKILL.md"
     find_skills_skill = workspace / "skills" / "find-skills" / "SKILL.md"
+    fitness_coach_skill = workspace / "skills" / "fitness-coach" / "SKILL.md"
+    fitness_coach_profile = workspace / "skills" / "fitness-coach" / "profiles" / "EXAMPLE-FITNESS-LOG.md"
+    fitness_coach_world = workspace / "skills" / "fitness-coach" / "worlds" / "default" / "WORLD-LOG.md"
     skill_creator_skill = workspace / "skills" / "skill-creator" / "SKILL.md"
     skill_creator_packager = workspace / "skills" / "skill-creator" / "scripts" / "package_skill.py"
     skill_creator_viewer = workspace / "skills" / "skill-creator" / "eval-viewer" / "generate_review.py"
@@ -438,12 +441,17 @@ def test_build_app_scaffolds_default_workspace_skills(tmp_path: Path) -> None:
     assert bookkeeping_skill.exists()
     assert note_taking_skill.exists()
     assert find_skills_skill.exists()
+    assert fitness_coach_skill.exists()
+    assert fitness_coach_profile.exists()
+    assert fitness_coach_world.exists()
     assert skill_creator_skill.exists()
     assert skill_creator_packager.exists()
     assert skill_creator_viewer.exists()
     bookkeeping_text = bookkeeping_skill.read_text(encoding="utf-8")
     note_taking_text = note_taking_skill.read_text(encoding="utf-8")
     find_skills_text = find_skills_skill.read_text(encoding="utf-8")
+    fitness_coach_text = fitness_coach_skill.read_text(encoding="utf-8")
+    fitness_coach_world_text = fitness_coach_world.read_text(encoding="utf-8")
     skill_creator_text = skill_creator_skill.read_text(encoding="utf-8")
 
     assert "bookkeeping" in bookkeeping_text
@@ -457,6 +465,10 @@ def test_build_app_scaffolds_default_workspace_skills(tmp_path: Path) -> None:
     assert "The Skills CLI (`npx skills`) is the package manager" in find_skills_text
     assert "workspace-local integration over global installation" in find_skills_text
     assert "workspace/skills/<skill-name>/" in find_skills_text
+    assert "fitness-coach" in fitness_coach_text
+    assert "专业、鼓励、数据驱动的个人健身教练" in fitness_coach_text
+    assert "剧情模式" in fitness_coach_text
+    assert "风痕原野" in fitness_coach_world_text
     assert "skill-creator" in skill_creator_text
     assert "workspace/skills/<skill-name>/" in skill_creator_text
     assert "Create new skills, modify and improve existing skills" in skill_creator_text
