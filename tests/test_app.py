@@ -399,8 +399,8 @@ def test_build_app_does_not_initialize_mflow_when_disabled(tmp_path: Path, monke
     assert app.core.mflow_bridge is None
 
 
-def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path: Path) -> None:
-    """新 workspace 应自动提供记账和自动笔记 skill 模板。"""
+def test_build_app_scaffolds_default_workspace_skills(tmp_path: Path) -> None:
+    """新 workspace 应自动提供默认的本地 skills。"""
 
     config_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
@@ -430,11 +430,21 @@ def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path
 
     bookkeeping_skill = workspace / "skills" / "bookkeeping" / "SKILL.md"
     note_taking_skill = workspace / "skills" / "note-taking" / "SKILL.md"
+    find_skills_skill = workspace / "skills" / "find-skills" / "SKILL.md"
+    skill_creator_skill = workspace / "skills" / "skill-creator" / "SKILL.md"
+    skill_creator_packager = workspace / "skills" / "skill-creator" / "scripts" / "package_skill.py"
+    skill_creator_viewer = workspace / "skills" / "skill-creator" / "eval-viewer" / "generate_review.py"
 
     assert bookkeeping_skill.exists()
     assert note_taking_skill.exists()
+    assert find_skills_skill.exists()
+    assert skill_creator_skill.exists()
+    assert skill_creator_packager.exists()
+    assert skill_creator_viewer.exists()
     bookkeeping_text = bookkeeping_skill.read_text(encoding="utf-8")
     note_taking_text = note_taking_skill.read_text(encoding="utf-8")
+    find_skills_text = find_skills_skill.read_text(encoding="utf-8")
+    skill_creator_text = skill_creator_skill.read_text(encoding="utf-8")
 
     assert "bookkeeping" in bookkeeping_text
     assert "ledger_upsert_draft" in bookkeeping_text
@@ -443,6 +453,14 @@ def test_build_app_scaffolds_default_bookkeeping_and_note_taking_skills(tmp_path
     assert "Always save when the user explicitly asks to remember something" in note_taking_text
     assert "Search existing notes before creating a new one" in note_taking_text
     assert "Do not auto-save one-off small talk" in note_taking_text
+    assert "find-skills" in find_skills_text
+    assert "The Skills CLI (`npx skills`) is the package manager" in find_skills_text
+    assert "workspace-local integration over global installation" in find_skills_text
+    assert "workspace/skills/<skill-name>/" in find_skills_text
+    assert "skill-creator" in skill_creator_text
+    assert "workspace/skills/<skill-name>/" in skill_creator_text
+    assert "Create new skills, modify and improve existing skills" in skill_creator_text
+    assert "claude -p" in skill_creator_text
 
 
 def test_build_app_scaffolds_scheduler_templates(tmp_path: Path) -> None:

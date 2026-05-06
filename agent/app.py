@@ -7,6 +7,7 @@ CLI、未来的 Feishu、甚至后续 Web 入口，都应该从这里拿到同�
 
 import asyncio
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -31,6 +32,8 @@ from agent.skills import SkillLoader
 from agent.tools.runtime_context import RuntimeServices
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SKILLS_TEMPLATE_DIR = Path(__file__).resolve().parent / "skills" / "defaults"
 
 
 DEFAULT_SOUL_TEMPLATE = """# SOUL.md
@@ -375,49 +378,15 @@ def _ensure_workspace_files(workspace_dir: Path) -> None:
 def _ensure_default_skills(skills_dir: Path) -> None:
     """确保新 workspace 自带基础业务 skill 模板。"""
 
-    # 这些默认 skill 会直接进入模型上下文，因此用中文描述业务规则；
-    # 工具名保持英文，避免影响 function calling 的精确匹配。
-    defaults = {
-        "bookkeeping": (
-            "---\n"
-            "name: bookkeeping\n"
-            "description: 主动使用账本工具处理记账请求，在必要字段完整后才提交正式账目。\n"
-            "---\n"
-            "# 账本处理\n"
-            "\n"
-            "- 用户表达收入、支出、报销、转账、预算，或询问账本统计时，视为账本工作流。\n"
-            "- 使用 `ledger_upsert_draft` 保存已知但尚未完整的账目字段。\n"
-            "- 当收支方向、金额或发生时间仍不明确时，先追问用户。\n"
-            "- 只有必要字段完整后，才调用 `ledger_commit_draft` 写入正式账本。\n"
-            "- 查询和汇总账本时使用 `ledger_query_entries` 与 `ledger_summary`。\n"
-            "- 不要提交猜测值；遇到歧义先澄清。\n"
-            "- 账本事实优先使用账本工具，不要写入 `profile_write` 或任意文件。\n"
-            "- 触发示例：`今天午饭 32`、`帮我记一笔报销 120`、`这个月餐饮花了多少`。\n"
-        ),
-        "note-taking": (
-            "---\n"
-            "name: note-taking\n"
-            "description: 将用户明确要求记住的内容和长期有效事实保存为结构化笔记。\n"
-            "---\n"
-            "# 笔记记录\n"
-            "\n"
-            "- 用户明确要求记住某事时，必须保存。\n"
-            "- 自动保存仅限长期有效事实，例如偏好、计划、约束和联系人。\n"
-            "- 新事实使用 `note_add`；用户纠正已保存事实时使用 `note_update`；新增前先用 `note_search` 避免重复。\n"
-            "- 对明确保存请求和重要长期笔记，给出简短确认。\n"
-            "- 创建新笔记前先搜索已有笔记。\n"
-            "- 不要自动保存一次性闲聊、临时情绪或把握不足的猜测。\n"
-            "- 保存长期用户事实时优先使用笔记工具，不要写入 `profile_write`。\n"
-            "- 长期事实示例：`我乳糖不耐受`、`以后默认中文回答`、`我更喜欢美式`、`六月计划去日本`。\n"
-        ),
-    }
+    if not DEFAULT_SKILLS_TEMPLATE_DIR.exists():
+        logger.warning("event=default_skills_templates_missing path=%s", DEFAULT_SKILLS_TEMPLATE_DIR)
+        return
 
-    for skill_name, content in defaults.items():
-        target = skills_dir / skill_name / "SKILL.md"
+    for template_dir in sorted(path for path in DEFAULT_SKILLS_TEMPLATE_DIR.iterdir() if path.is_dir()):
+        target = skills_dir / template_dir.name
         if target.exists():
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        shutil.copytree(template_dir, target)
 
 
 def _build_system_prompt(agent_name: str) -> str:
@@ -429,8 +398,7 @@ def _build_system_prompt(agent_name: str) -> str:
     # 方便后续排查模型为什么选择某个工具或某种回复风格。
     return "\n".join(
         [
-            f"你是 {agent_name}。",
-            "必须以系统提供的当前时间作为日期、时间和年份判断的事实来源。",
+            "你是一个智能Agent，你拥有自己的思想，你的信念是做一个超级无敌的智能体，帮助用户解决所有问题，必须以系统提供的当前时间作为日期、时间和年份判断的事实来源。",
             "",
             "[时间与事实基准]",
             (
