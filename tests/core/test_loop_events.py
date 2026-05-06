@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent.core.loop import AgentCore
 from agent.core.provider import LLMResponse, LLMStreamChunk
+from agent.fitness.change_store import FitnessPendingChangeStore
 from agent.gateway.normalizer import NormalizedMessage
 from agent.scheduler.cron import CronScheduler
 from agent.tools.runtime_context import RuntimeServices
@@ -104,8 +105,11 @@ class CronListProviderManager:
 
     async def call(self, request):
         self.calls += 1
-        if self.calls > 1:
-            raise AssertionError("cron_list_tasks should not require a second model call")
+        first_content = request.messages[0]["content"] if request.messages else ""
+        if "你是工具可见性路由器" in first_content:
+            return type("Resp", (), {"type": "text", "text": "scheduling", "tool_calls": None})()
+        if self.calls > 2:
+            raise AssertionError("cron_list_tasks should not require a second main-model call")
         return type(
             "Resp",
             (),
@@ -123,7 +127,10 @@ class ReminderPastProviderManager:
 
     async def call(self, request):
         self.calls += 1
-        if self.calls > 1:
+        first_content = request.messages[0]["content"] if request.messages else ""
+        if "你是工具可见性路由器" in first_content:
+            return type("Resp", (), {"type": "text", "text": "scheduling", "tool_calls": None})()
+        if self.calls > 2:
             raise AssertionError("failed reminder_create should return a direct error response")
         return type(
             "Resp",
@@ -141,6 +148,31 @@ class ReminderPastProviderManager:
                             "run_at": "2026-04-27T13:10:00+08:00",
                             "timezone": "Asia/Shanghai",
                         },
+                    }
+                ],
+            },
+        )()
+
+
+class FitnessProfileUpdateProviderManager:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, request):
+        self.calls += 1
+        if any(message["role"] == "tool" for message in request.messages):
+            return type("Resp", (), {"type": "text", "text": "done", "tool_calls": None})()
+        return type(
+            "Resp",
+            (),
+            {
+                "type": "tool_calls",
+                "text": "",
+                "tool_calls": [
+                    {
+                        "id": "tool-fitness-1",
+                        "name": "fitness_profile_update",
+                        "input": {"goal": "力量提升", "plan_style": "PPL"},
                     }
                 ],
             },
@@ -215,9 +247,51 @@ def test_cron_list_tool_result_returns_direct_response_without_second_model_call
 
     events = asyncio.run(collect())
 
-    assert provider.calls == 1
+    assert provider.calls == 2
     assert events[-1].kind == "run_finished"
     assert events[-1].result_text.startswith("你现在有 1 个定时任务")
+
+
+def test_fitness_profile_update_tool_stages_major_change_in_runtime_loop(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "skills").mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "MEMORY.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = FitnessProfileUpdateProviderManager()
+    runtime_services = RuntimeServices(fitness_change_store=FitnessPendingChangeStore())
+    core = AgentCore.build_for_test(
+        workspace,
+        provider,
+        runtime_services=runtime_services,
+    )
+
+    message = NormalizedMessage(
+        message_id="msg-fitness-stage",
+        session_id="chat-stage",
+        sender="ou-user-1",
+        body="把我的训练目标改成力量提升，分化改成 PPL",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    async def collect():
+        return [event async for event in core.run_events(message)]
+
+    events = asyncio.run(collect())
+
+    tool_result = next(event for event in events if event.kind == "tool_call_result")
+    assert "需要确认" in tool_result.content
+    assert "健身档案" in tool_result.content
+    profile_text = (workspace / "fitness" / "PROFILE.json").read_text(encoding="utf-8")
+    assert '"goal": ""' in profile_text
+    pending = runtime_services.fitness_change_store.get(
+        "feishu:feishu:chat-stage",
+        sender="ou-user-1",
+    )
+    assert pending is not None
+    assert pending.target == "profile"
 
 
 def test_memory_items_do_not_include_saved_notes_by_default(tmp_path: Path) -> None:
@@ -240,7 +314,11 @@ def test_memory_items_do_not_include_saved_notes_by_default(tmp_path: Path) -> N
     core = AgentCore.build_for_test(workspace, FakeProviderManager())
     core.note_store = note_store
 
-    memory_items = core._build_memory_items_text("你是谁")
+    memory_items = core._build_memory_items_text(
+        user_message="你是谁",
+        sender_id="ou-user-1",
+        thread_id="thread-1",
+    )
 
     assert memory_items == ""
 
@@ -282,7 +360,7 @@ def test_failed_reminder_create_returns_direct_error_without_retry(tmp_path: Pat
 
     events = asyncio.run(collect())
 
-    assert provider.calls == 1
+    assert provider.calls == 2
     assert events[-1].kind == "run_finished"
     assert events[-1].result_text.startswith("创建提醒失败")
     assert scheduler.list_reminders() == []

@@ -83,6 +83,7 @@ def test_cron_create_task_is_hot_loaded_and_persisted(tmp_path: Path) -> None:
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )
@@ -162,6 +163,7 @@ async def test_cron_run_now_generates_execution_run_id_without_restart(tmp_path:
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )
@@ -189,6 +191,7 @@ def test_cron_update_list_and_delete_task(tmp_path: Path) -> None:
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )

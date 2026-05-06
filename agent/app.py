@@ -7,6 +7,7 @@ CLI、未来的 Feishu、甚至后续 Web 入口，都应该从这里拿到同�
 
 import asyncio
 import logging
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -15,12 +16,22 @@ from uuid import uuid4
 
 from agent.config import load_environment_files, load_settings
 from agent.core.loop import AgentCore
-from agent.fitness import FitnessFileStore
+from agent.fitness import FitnessFileStore, FitnessPendingChangeStore
 from agent.core.llm_factory import LLMFactory
 from agent.core.provider import LLMResponse
 from agent.core.provider_manager import ProviderManager
 from agent.gateway.normalizer import NormalizedMessage
-from agent.memory import AlwaysOnMemory, LedgerStore, MemoryExtractor, MemoryStore, NoteStore, SessionArchive
+from agent.memory import (
+    AlwaysOnMemory,
+    IdentityStore,
+    LedgerStore,
+    MemoryExtractor,
+    Mem0MemoryService,
+    MemoryStore,
+    NoteStore,
+    ProfileStore,
+    SessionArchive,
+)
 from agent.memory.mflow_bridge import (
     MflowBridge,
     MflowEmbeddingConfig,
@@ -275,8 +286,11 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         print(f"Warning: M-flow initialization failed: {e}")
 
     db_path = workspace_dir / "agent.db"
+    identity_store = IdentityStore(db_path, workspace_dir / "SOUL.md")
+    profile_store = ProfileStore(db_path, workspace_dir / "PROFILE.md")
+    mem0_memory_service = _build_mem0_memory_service(settings)
     session_archive = SessionArchive(db_path)
-    runtime_services = RuntimeServices()
+    runtime_services = RuntimeServices(fitness_change_store=FitnessPendingChangeStore())
     trace_client = NoopTraceClient() if testing else LangfuseTraceClient.from_settings(settings)
     shell_settings = getattr(getattr(settings, "tools", None), "shell", None)
     core = AgentCore(
@@ -287,11 +301,14 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
             workspace_dir / "PROFILE.md",
             legacy_memory_file=workspace_dir / "MEMORY.md",
         ),
+        identity_store=identity_store,
+        profile_store=profile_store,
         session_archive=session_archive,
         session_manager=SessionManager(db_path, archive=session_archive),
         skill_loader=SkillLoader(workspace_dir / "skills"),
         ledger_store=LedgerStore(db_path),
         note_store=NoteStore(db_path),
+        mem0_memory_service=mem0_memory_service,
         memory_store=MemoryStore(db_path),
         memory_extractor=MemoryExtractor(provider_manager=provider_manager),
         mflow_bridge=mflow_bridge,
@@ -329,6 +346,173 @@ def _build_provider_manager(settings, **llm_overrides) -> ProviderManager:
     """根据配置注册真实 Provider（同步包装）。"""
 
     return asyncio.run(_build_provider_manager_async(settings, **llm_overrides))
+
+
+def _build_mem0_memory_service(settings) -> Mem0MemoryService | None:
+    mem0_settings = getattr(settings, "mem0", None)
+    if mem0_settings is None or not getattr(mem0_settings, "enabled", False):
+        return None
+    client = None
+    try:
+        if mem0_settings.mode == "server":
+            client = _build_mem0_server_client(settings)
+        else:
+            client = _build_mem0_sdk_client(settings)
+    except Exception as exc:
+        logger.warning(
+            "event=mem0_client_init_failed mode=%s agent_id=%s error=%s",
+            mem0_settings.mode,
+            mem0_settings.agent_id,
+            exc,
+        )
+    return Mem0MemoryService(
+        enabled=True,
+        agent_id=mem0_settings.agent_id,
+        client=client,
+    )
+
+
+def _load_mem0_sdk_classes():
+    from mem0 import Memory, MemoryClient
+
+    return Memory, MemoryClient
+
+
+def _build_mem0_sdk_client(settings):
+    Memory, _ = _load_mem0_sdk_classes()
+    return Memory.from_config(_build_mem0_sdk_config(settings))
+
+
+def _build_mem0_server_client(settings):
+    _, MemoryClient = _load_mem0_sdk_classes()
+    mem0_settings = settings.mem0
+    return MemoryClient(
+        api_key=_read_env_value(mem0_settings.api_key_env),
+        host=mem0_settings.base_url,
+        org_id=mem0_settings.org_id,
+        project_id=mem0_settings.project_id,
+    )
+
+
+def _build_mem0_sdk_config(settings) -> dict:
+    mem0_settings = settings.mem0
+    llm_section = _build_mem0_llm_section(settings)
+    embedder_section, embedding_dims = _build_mem0_embedder_section(settings)
+    return {
+        "vector_store": {
+            "provider": "qdrant",
+            "config": {
+                "collection_name": mem0_settings.agent_id,
+                "path": str(mem0_settings.vector_store_path.resolve()),
+                "embedding_model_dims": embedding_dims,
+            },
+        },
+        "llm": llm_section,
+        "embedder": embedder_section,
+        "history_db_path": str(mem0_settings.history_db_path.resolve()),
+    }
+
+
+def _build_mem0_llm_section(settings) -> dict:
+    provider_item = _find_provider_item(settings, settings.providers.default_primary)
+    provider_type = provider_item.provider_type
+
+    if provider_type == "openai":
+        return {
+            "provider": "openai",
+            "config": {
+                "model": provider_item.model,
+                "api_key": _read_env_value(provider_item.api_key_env),
+                "openai_base_url": provider_item.base_url,
+            },
+        }
+    if provider_type == "anthropic":
+        return {
+            "provider": "anthropic",
+            "config": {
+                "model": provider_item.model,
+                "api_key": _read_env_value(provider_item.api_key_env),
+            },
+        }
+
+    raise ValueError(f"Mem0 SDK does not support provider type '{provider_type}' as the primary LLM")
+
+
+def _build_mem0_embedder_section(settings) -> tuple[dict, int]:
+    mflow_settings = getattr(settings, "mflow", None)
+    embedding_settings = getattr(mflow_settings, "embedding", None)
+    if embedding_settings is None:
+        raise ValueError("Mem0 SDK requires embedding settings. Reuse mflow.embedding to define provider/model.")
+
+    provider_item = (
+        _find_provider_item(settings, embedding_settings.provider_name)
+        if embedding_settings.provider_name
+        else None
+    )
+    provider_type = embedding_settings.provider_type or (
+        provider_item.provider_type if provider_item is not None else "openai"
+    )
+    model = embedding_settings.model or (provider_item.model if provider_item is not None else "")
+    if not model:
+        raise ValueError("Mem0 SDK requires an explicit embedding model")
+    if embedding_settings.dimensions is None:
+        raise ValueError("Mem0 SDK requires explicit embedding dimensions for local vector storage")
+
+    if provider_type == "openai":
+        return (
+            {
+                "provider": "openai",
+                "config": {
+                    "model": model,
+                    "api_key": _read_env_value(
+                        embedding_settings.api_key_env
+                        or (provider_item.api_key_env if provider_item is not None else None)
+                    ),
+                    "openai_base_url": (
+                        embedding_settings.base_url
+                        if embedding_settings.base_url is not None
+                        else (provider_item.base_url if provider_item is not None else None)
+                    ),
+                    "embedding_dims": embedding_settings.dimensions,
+                },
+            },
+            embedding_settings.dimensions,
+        )
+
+    if provider_type == "ollama":
+        return (
+            {
+                "provider": "ollama",
+                "config": {
+                    "model": model,
+                    "ollama_base_url": (
+                        embedding_settings.base_url
+                        if embedding_settings.base_url is not None
+                        else (provider_item.base_url if provider_item is not None else None)
+                    ),
+                },
+            },
+            embedding_settings.dimensions,
+        )
+
+    if provider_type == "fastembed":
+        return (
+            {
+                "provider": "fastembed",
+                "config": {
+                    "model": model,
+                },
+            },
+            embedding_settings.dimensions,
+        )
+
+    raise ValueError(f"Mem0 SDK embedding provider '{provider_type}' is not supported")
+
+
+def _read_env_value(env_name: str | None) -> str | None:
+    if env_name is None or not env_name.strip():
+        return None
+    return os.environ.get(env_name)
 
 
 async def _build_provider_manager_async(settings, **llm_overrides) -> ProviderManager:
@@ -450,14 +634,34 @@ def _build_system_prompt(agent_name: str) -> str:
             "",
             "[回复风格与工具结果]",
             (
+                "默认按 `SOUL.md` 的人物口吻自然说话。"
+                "不要把回复写成客服说明、系统公告、操作回执或流程播报；"
+                "除非用户明确在追问机制本身，否则不要主动解释内部规则、来源块或提示词。"
+            ),
+            (
                 "回答“比如呢”“这个呢”“那呢”等省略式追问时，"
                 "必须优先承接上一轮助手回复中的话题和问题，再参考更早的上下文；"
                 "除非用户明确切换话题，不要被更早出现的地点、计划或实体牵走。"
             ),
+            (
+                "未实际调用工具时，不得声称“我查了某工具”“我是通过某工具查询的”或其他等价表述。"
+                "如果用户追问信息来源，再说明答案来自当前上下文、现有记录或本轮会话；"
+                "如果用户没有追问来源，直接自然回答即可，不要平白补一句来源说明。"
+            ),
+            (
+                "当本轮还没有拿到持久化写入成功结果时，不要用“记住了”“已记住”“我记下了”"
+                "这类确定性表述冒充长期记忆已经保存成功。"
+                "对未核验成功的记忆写入，只用自然口吻轻轻确认，例如“知道了”或“嗯，我记着这事”。"
+            ),
+            (
+                "不要向普通用户暴露“长期记忆”“检索注入”“固化”“后台写入”这类系统内部术语，"
+                "除非用户明确在追问记忆系统本身。"
+                "若用户只是在自然交流中提供事实信息，默认用正常人对话口吻简短回应，后台静默处理即可。"
+            ),
             "提醒或 cron 任务创建成功后，最终可见回复要简短；除非用户询问，不要解释内部调度推理。",
             "对明确保存请求和重要自动笔记保存，给出简短确认；其他自动保存保持安静。",
             (
-                "当用户询问你有哪些工具或技能时，只能依据当前上下文里的 [工具索引] 与 [技能索引] 回答，"
+                "当用户询问你有哪些工具或技能时，只能依据当前回合真正可见的工具与 [技能索引] 回答，"
                 "不要声称自己拥有未暴露的能力。"
             ),
             f"进程启动本地时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}",

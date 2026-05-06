@@ -35,8 +35,47 @@ def fitness_profile_update(
     explanation_depth: str | None = None,
     encouragement_level: str | None = None,
     interaction_mode: str | None = None,
+    context=None,
 ) -> str:
     store = _coerce_store(store_or_root)
+    staged_updates = _provided_dict(
+        name=name,
+        age=age,
+        height_cm=height_cm,
+        weight_kg=weight_kg,
+        goal=goal,
+        level=level,
+        equipment=equipment,
+        schedule=schedule,
+        preferred_time=preferred_time,
+        injuries=injuries,
+        movement_restrictions=movement_restrictions,
+        plan_style=plan_style,
+        current_program_notes=current_program_notes,
+        primary_coach=primary_coach,
+        coach_mix_rules=coach_mix_rules,
+        tone_style=tone_style,
+        explanation_depth=explanation_depth,
+        encouragement_level=encouragement_level,
+        interaction_mode=interaction_mode,
+    )
+    if _requires_confirmation(staged_updates, _major_profile_fields()) and context is not None:
+        services = (context.metadata or {}).get("runtime_services")
+        change_store = getattr(services, "fitness_change_store", None) if services is not None else None
+        if change_store is not None:
+            summary = _summarize_changes(staged_updates, prefix="健身档案")
+            change_store.stage(
+                context.thread_key,
+                sender=context.sender,
+                target="profile",
+                updates=staged_updates,
+                summary=summary,
+            )
+            return (
+                f"这是需要确认的重大健身档案变更，我已暂存：{summary}。\n"
+                "确认写入请回复“确认”，放弃本次修改请回复“取消”。"
+            )
+
     payload = store.update_profile(
         name=name,
         age=age,
@@ -80,8 +119,39 @@ def fitness_settings_update(
     protagonist_mode: str | None = None,
     identity_role: str | None = None,
     core_drive: str | None = None,
+    context=None,
 ) -> str:
     store = _coerce_store(store_or_root)
+    staged_updates = _provided_dict(
+        rpg_enabled=rpg_enabled,
+        story_density=story_density,
+        pre_battle_narration=pre_battle_narration,
+        post_battle_narration=post_battle_narration,
+        attribute_display=attribute_display,
+        title_style=title_style,
+        world_mode=world_mode,
+        world_name=world_name,
+        protagonist_mode=protagonist_mode,
+        identity_role=identity_role,
+        core_drive=core_drive,
+    )
+    if _requires_confirmation(staged_updates, _major_settings_fields()) and context is not None:
+        services = (context.metadata or {}).get("runtime_services")
+        change_store = getattr(services, "fitness_change_store", None) if services is not None else None
+        if change_store is not None:
+            summary = _summarize_changes(staged_updates, prefix="健身设定")
+            change_store.stage(
+                context.thread_key,
+                sender=context.sender,
+                target="settings",
+                updates=staged_updates,
+                summary=summary,
+            )
+            return (
+                f"这是需要确认的重大健身设定变更，我已暂存：{summary}。\n"
+                "确认写入请回复“确认”，放弃本次修改请回复“取消”。"
+            )
+
     payload = store.update_settings(
         rpg_enabled=rpg_enabled,
         story_density=story_density,
@@ -162,3 +232,41 @@ def _flatten_non_empty(payload: dict) -> dict:
                 continue
             flat[key] = item
     return flat
+
+
+def _provided_dict(**kwargs) -> dict:
+    return {key: value for key, value in kwargs.items() if value is not None}
+
+
+def _major_profile_fields() -> set[str]:
+    return {
+        "goal",
+        "level",
+        "equipment",
+        "injuries",
+        "movement_restrictions",
+        "plan_style",
+        "primary_coach",
+        "coach_mix_rules",
+    }
+
+
+def _major_settings_fields() -> set[str]:
+    return {
+        "rpg_enabled",
+        "story_density",
+        "world_mode",
+        "world_name",
+        "protagonist_mode",
+        "identity_role",
+        "core_drive",
+    }
+
+
+def _requires_confirmation(updates: dict, guarded_fields: set[str]) -> bool:
+    return any(key in guarded_fields for key in updates)
+
+
+def _summarize_changes(updates: dict, *, prefix: str) -> str:
+    parts = [f"{key}={value}" for key, value in updates.items()]
+    return f"{prefix}更新（" + "，".join(parts) + "）"

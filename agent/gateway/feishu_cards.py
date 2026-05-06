@@ -8,6 +8,7 @@ import json
 import re
 
 TOOL_NAME_ZH: dict[str, str] = {
+    "assistant_identity_update": "更新助手身份",
     "file_read": "读取文件",
     "file_write": "写入文件",
     "fitness_profile_get": "查看健身档案",
@@ -22,6 +23,7 @@ TOOL_NAME_ZH: dict[str, str] = {
     "ledger_commit_draft": "提交账目",
     "ledger_query_entries": "查询账目",
     "ledger_summary": "账目汇总",
+    "profile_core_update": "更新核心资料",
     "profile_write": "更新档案",
     "memory_search": "搜索记忆",
     "memory_list_recent": "最近记忆",

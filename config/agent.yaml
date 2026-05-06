@@ -44,7 +44,8 @@ mflow:
   # Defaults to providers.default_primary when omitted.
   llm_provider_name: "qwen"
   embedding:
-    # Reuse an existing provider's api_key/base_url, then override the model.
+    # Reuse the existing qwen provider and keep using OPENAI_API_KEY as the env name.
+    # The env var name does not need to be DASHSCOPE_API_KEY as long as the key value is correct.
     provider_name: "qwen"
     model: "text-embedding-v4"
     # DashScope text-embedding-v4 defaults to 1024 dims and allows at most 10
@@ -53,10 +54,22 @@ mflow:
     dimensions: 1024
     batch_size: 10
     # Optional explicit overrides:
-    # api_key_env: "DASHSCOPE_API_KEY"
+    # api_key_env: "OPENAI_API_KEY"
     # base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # dimensions: 1024
     # batch_size: 10
+
+mem0:
+  enabled: true
+  # Minimal local SDK mode: no Mem0 server, no dashboard, no extra middleware.
+  # Reuses `providers.default_primary` as the fact-extraction LLM and
+  # reuses `mflow.embedding` as the embedding source for local Qdrant storage.
+  # `api_key_env` is only used when mode = "server".
+  mode: "sdk"
+  agent_id: "yi-min"
+  api_key_env: "MEM0_API_KEY"
+  vector_store_path: "../workspace/mem0_qdrant"
+  history_db_path: "../workspace/mem0_history.db"
 
 channels:
   instances:

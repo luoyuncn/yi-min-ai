@@ -1,5 +1,6 @@
 from agent.memory.memory_extractor import MemoryExtractor
 from agent.core.provider import LLMResponse
+import logging
 import pytest
 
 
@@ -105,6 +106,72 @@ async def test_memory_extractor_uses_llm_for_identity_and_preference_extraction(
 
 
 @pytest.mark.asyncio
+async def test_memory_extractor_uses_llm_for_family_relationship_without_explicit_marker() -> None:
+    provider = JsonMemoryProvider(
+        """
+        {
+          "memories": [
+            {
+              "kind": "relationship",
+              "title": "家庭信息",
+              "content": "用户儿子叫罗一一。",
+              "confidence": 0.94,
+              "importance": "high"
+            }
+          ]
+        }
+        """
+    )
+    extractor = MemoryExtractor(provider_manager=provider)
+
+    candidates = await extractor.extract_async(
+        user_message="我儿子叫罗一一",
+        assistant_message="我收到了这条信息。",
+        thread_id="thread-1",
+        message_id="msg-family-memory",
+        sender_id="sender-1",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].kind == "relationship"
+    assert "罗一一" in candidates[0].content
+    assert provider.requests
+
+
+@pytest.mark.asyncio
+async def test_memory_extractor_uses_llm_for_dated_family_event_without_explicit_marker() -> None:
+    provider = JsonMemoryProvider(
+        """
+        {
+          "memories": [
+            {
+              "kind": "fact",
+              "title": "家庭事件",
+              "content": "2026年5月2日，用户给妈妈过了生日。",
+              "confidence": 0.88,
+              "importance": "medium"
+            }
+          ]
+        }
+        """
+    )
+    extractor = MemoryExtractor(provider_manager=provider)
+
+    candidates = await extractor.extract_async(
+        user_message="5.2日给我妈妈过了生日",
+        assistant_message="我收到了这条信息。",
+        thread_id="thread-1",
+        message_id="msg-dated-family-event",
+        sender_id="sender-1",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].kind == "fact"
+    assert "给妈妈过了生日" in candidates[0].content
+    assert provider.requests
+
+
+@pytest.mark.asyncio
 async def test_memory_extractor_skips_llm_when_message_has_no_durable_memory() -> None:
     provider = JsonMemoryProvider('{"memories":[]}')
     extractor = MemoryExtractor(provider_manager=provider)
@@ -138,6 +205,55 @@ async def test_memory_extractor_falls_back_to_rules_when_llm_returns_no_memories
     assert candidates[0].kind == "preference"
     assert "Tims 冷萃美式" in candidates[0].content
     assert provider.requests
+
+
+@pytest.mark.asyncio
+async def test_memory_extractor_logs_when_llm_returns_empty_memories(caplog) -> None:
+    provider = JsonMemoryProvider('{"memories":[]}')
+    extractor = MemoryExtractor(provider_manager=provider)
+    caplog.set_level(logging.INFO, logger="agent.memory.memory_extractor")
+
+    await extractor.extract_async(
+        user_message="我老婆姓刘",
+        assistant_message="我收到了这条信息。",
+        thread_id="thread-1",
+        message_id="msg-empty-memories",
+        sender_id="sender-1",
+    )
+
+    assert "event=memory_extract_llm_empty_memories" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_memory_extractor_logs_when_llm_candidates_are_filtered(caplog) -> None:
+    provider = JsonMemoryProvider(
+        """
+        {
+          "memories": [
+            {
+              "kind": "unknown_kind",
+              "title": "家庭信息",
+              "content": "用户老婆姓刘。",
+              "confidence": 0.92,
+              "importance": "high"
+            }
+          ]
+        }
+        """
+    )
+    extractor = MemoryExtractor(provider_manager=provider)
+    caplog.set_level(logging.INFO, logger="agent.memory.memory_extractor")
+
+    await extractor.extract_async(
+        user_message="我老婆姓刘",
+        assistant_message="我收到了这条信息。",
+        thread_id="thread-1",
+        message_id="msg-filtered-candidate",
+        sender_id="sender-1",
+    )
+
+    assert "event=memory_extract_llm_candidates_filtered" in caplog.text
+    assert "reasons=invalid_kind" in caplog.text
 
 
 def test_memory_extractor_ignores_small_talk_and_provider_errors() -> None:

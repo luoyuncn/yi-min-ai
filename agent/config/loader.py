@@ -17,6 +17,7 @@ from agent.config.models import (
     ChannelInstanceSettings,
     ChannelSettings,
     LangfuseSettings,
+    Mem0Settings,
     MflowEmbeddingSettings,
     MflowSettings,
     ObservabilitySettings,
@@ -93,6 +94,7 @@ def load_settings(agent_config_path: Path) -> Settings:
             config_dir=config_dir,
             provider_names=provider_names,
         ),
+        mem0=_build_mem0_settings(_optional_mapping(raw, "mem0"), config_dir=config_dir),
         tools=_build_tool_settings(_optional_mapping(raw, "tools")),
         observability=_build_observability_settings(_optional_mapping(raw, "observability")),
     )
@@ -372,6 +374,44 @@ def _build_mflow_embedding_settings(
         api_version=_optional_str(data, "api_version"),
         dimensions=_optional_int(data, "dimensions"),
         batch_size=_optional_int(data, "batch_size"),
+    )
+
+
+def _build_mem0_settings(data: dict | None, *, config_dir: Path) -> Mem0Settings:
+    """解析可选的 Mem0 配置。"""
+
+    if data is None:
+        return Mem0Settings(
+            vector_store_path=_resolve_path(config_dir, "../workspace/mem0_qdrant", field_name="mem0.vector_store_path"),
+            history_db_path=_resolve_path(config_dir, "../workspace/mem0_history.db", field_name="mem0.history_db_path"),
+        )
+
+    enabled = _optional_bool(data, "enabled")
+    mode = _optional_str(data, "mode") or "sdk"
+    if mode not in {"sdk", "server"}:
+        raise ConfigError("mem0.mode must be either 'sdk' or 'server'")
+
+    vector_store_path_text = _optional_str(data, "vector_store_path") or "../workspace/mem0_qdrant"
+    history_db_path_text = _optional_str(data, "history_db_path") or "../workspace/mem0_history.db"
+
+    return Mem0Settings(
+        enabled=False if enabled is None else enabled,
+        mode=mode,
+        agent_id=_optional_str(data, "agent_id") or "yi-min",
+        api_key_env=_optional_str(data, "api_key_env") or "MEM0_API_KEY",
+        base_url=_optional_str(data, "base_url"),
+        org_id=_optional_str(data, "org_id"),
+        project_id=_optional_str(data, "project_id"),
+        vector_store_path=_resolve_path(
+            config_dir,
+            vector_store_path_text,
+            field_name="mem0.vector_store_path",
+        ),
+        history_db_path=_resolve_path(
+            config_dir,
+            history_db_path_text,
+            field_name="mem0.history_db_path",
+        ),
     )
 
 

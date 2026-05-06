@@ -574,6 +574,9 @@ def test_build_system_prompt_includes_bookkeeping_and_note_taking_policy() -> No
     assert "不要把账本事实或笔记事实写入 `PROFILE.md`" in prompt
     assert "当用户询问自己是谁、自己的名字是什么" in prompt
     assert "当用户询问你有哪些工具或技能时" in prompt
+    assert "当前回合真正可见的工具" in prompt
+    assert "不要向普通用户暴露“长期记忆”“检索注入”“固化”“后台写入”" in prompt
+    assert "若用户只是在自然交流中提供事实信息" in prompt
 
 
 def test_build_mflow_llm_config_qualifies_dashscope_model_for_litellm(tmp_path: Path) -> None:

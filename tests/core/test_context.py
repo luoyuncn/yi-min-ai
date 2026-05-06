@@ -23,7 +23,8 @@ def test_context_assembler_includes_system_memory_skills_history_and_user_messag
     assert "[PROFILE.md]" in context[0]["content"]
     assert "[MEMORY.md]" not in context[0]["content"]
     assert "prefers python" in context[0]["content"]
-    assert "可用工具" in context[0]["content"]
+    assert "可用技能" in context[0]["content"]
+    assert "可用工具" not in context[0]["content"]
     assert context[-1]["role"] == "user"
 
 
@@ -68,8 +69,8 @@ def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
     assert "SOUL.md` 是助手活跃身份" in system_content
 
 
-def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
-    """系统上下文应同时显式暴露工具索引和技能索引。"""
+def test_context_assembler_keeps_skill_index_but_not_tool_index_block() -> None:
+    """系统上下文应保留技能索引，但不再重复注入文字版工具索引。"""
 
     assembler = ContextAssembler(system_prompt="")
 
@@ -84,10 +85,10 @@ def test_context_assembler_includes_tool_and_skill_index_blocks() -> None:
 
     system_content = context[0]["content"]
 
-    assert "[工具索引]" in system_content
-    assert "note_add: 创建一条笔记" in system_content
     assert "[技能索引]" in system_content
     assert "note-taking: 保存长期事实" in system_content
+    assert "[工具索引]" not in system_content
+    assert "note_add: 创建一条笔记" not in system_content
 
 
 def test_context_assembler_includes_feishu_rendering_hint() -> None:
@@ -138,6 +139,8 @@ def test_context_assembler_includes_human_context_and_memory_items() -> None:
     assert "当前发送者：ou-user-1" in system_content
     assert "聊天类型：group" in system_content
     assert "[检索到的长期记忆]" in system_content
+    assert "已经成功检索到的长期记忆" in system_content
+    assert "不要否认它们存在" in system_content
     assert "Tims 冷萃美式" in system_content
 
 

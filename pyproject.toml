@@ -18,6 +18,7 @@ dependencies = [
   "langfuse>=4.0.0",
   "lancedb>=0.15.0",
   "openai>=1.30.0",
+  "mem0ai>=1.0.11",
   "croniter>=2.0.0",
   "python-dotenv>=1.0.1",
   "pyyaml>=6.0.2",

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from agent.fitness.file_store import FitnessFileStore
+from agent.fitness.change_store import FitnessPendingChangeStore
 from agent.tools.builtin.fitness_tools import (
     fitness_audit_recent,
     fitness_profile_get,
@@ -11,6 +12,7 @@ from agent.tools.builtin.fitness_tools import (
     fitness_workout_append,
     fitness_workout_recent,
 )
+from agent.tools.runtime_context import RuntimeServices, RuntimeToolContext
 
 
 def test_fitness_tools_can_update_profile_append_workout_and_read_audit(tmp_path: Path) -> None:
@@ -77,3 +79,59 @@ def test_fitness_store_scaffolds_expected_files(tmp_path: Path) -> None:
     profile = json.loads((tmp_path / "fitness" / "PROFILE.json").read_text(encoding="utf-8"))
     assert "training_profile" in profile
     assert "coach_settings" in profile
+
+
+def test_fitness_profile_update_stages_major_change_until_confirmed(tmp_path: Path) -> None:
+    store = FitnessFileStore(tmp_path)
+    pending = FitnessPendingChangeStore()
+    services = RuntimeServices(fitness_change_store=pending)
+    context = RuntimeToolContext(
+        workspace_dir=tmp_path,
+        run_id="run-1",
+        channel="feishu",
+        channel_instance="feishu",
+        session_id="chat-1",
+        thread_key="feishu:feishu:chat-1",
+        sender="user-1",
+        metadata={"runtime_services": services},
+    )
+
+    result = fitness_profile_update(
+        store,
+        goal="力量提升",
+        plan_style="PPL",
+        context=context,
+    )
+
+    assert "需要确认" in result
+    assert pending.get("feishu:feishu:chat-1", sender="user-1") is not None
+    profile_text = fitness_profile_get(store)
+    assert '"goal": ""' in profile_text
+
+
+def test_fitness_profile_update_stages_empty_string_when_clearing_guarded_field(tmp_path: Path) -> None:
+    store = FitnessFileStore(tmp_path)
+    store.update_profile(goal="力量提升")
+    pending = FitnessPendingChangeStore()
+    services = RuntimeServices(fitness_change_store=pending)
+    context = RuntimeToolContext(
+        workspace_dir=tmp_path,
+        run_id="run-1",
+        channel="feishu",
+        channel_instance="feishu",
+        session_id="chat-1",
+        thread_key="feishu:feishu:chat-1",
+        sender="user-1",
+        metadata={"runtime_services": services},
+    )
+
+    result = fitness_profile_update(
+        store,
+        goal="",
+        context=context,
+    )
+
+    assert "需要确认" in result
+    staged = pending.get("feishu:feishu:chat-1", sender="user-1")
+    assert staged is not None
+    assert staged.updates["goal"] == ""

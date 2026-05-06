@@ -61,6 +61,78 @@ def test_default_configs_disable_mflow_by_default() -> None:
     assert linux_settings.mflow.enabled is False
 
 
+def test_default_configs_include_enabled_mem0_local_mode() -> None:
+    """当前默认配置应直接启用最简本地 Mem0 形态。"""
+
+    local_settings = load_settings(Path("config/agent.yaml"))
+    linux_settings = load_settings(Path("config/agent.linux.yaml"))
+
+    assert local_settings.mem0 is not None
+    assert local_settings.mem0.enabled is True
+    assert local_settings.mem0.mode == "sdk"
+    assert local_settings.mem0.agent_id == "yi-min"
+    assert local_settings.mem0.vector_store_path == Path("workspace/mem0_qdrant").resolve()
+    assert local_settings.mem0.history_db_path == Path("workspace/mem0_history.db").resolve()
+
+    assert linux_settings.mem0 is not None
+    assert linux_settings.mem0.enabled is True
+    assert linux_settings.mem0.mode == "sdk"
+    assert linux_settings.mem0.agent_id == "yi-min"
+    assert linux_settings.mem0.vector_store_path == Path("workspace/mem0_qdrant").resolve()
+    assert linux_settings.mem0.history_db_path == Path("workspace/mem0_history.db").resolve()
+
+
+def test_load_settings_parses_explicit_mem0_settings(tmp_path: Path) -> None:
+    """Mem0 配置应支持最简本地路径模式和可选远程字段。"""
+
+    config_dir = tmp_path / "config"
+    workspace_dir = tmp_path / "workspace"
+    config_dir.mkdir()
+    workspace_dir.mkdir()
+
+    (config_dir / "agent.yaml").write_text(
+        "agent:\n"
+        "  name: Yi Min\n"
+        "  workspace_dir: ../workspace\n"
+        "  max_iterations: 8\n"
+        "providers:\n"
+        "  config_file: providers.yaml\n"
+        "  default_primary: qwen\n"
+        "mem0:\n"
+        "  enabled: true\n"
+        "  mode: sdk\n"
+        "  agent_id: custom-agent\n"
+        "  api_key_env: MEM0_API_KEY\n"
+        "  base_url: http://localhost:8888\n"
+        "  org_id: test-org\n"
+        "  project_id: test-project\n"
+        "  vector_store_path: ../workspace/custom-qdrant\n"
+        "  history_db_path: ../workspace/custom-history.db\n",
+        encoding="utf-8",
+    )
+    (config_dir / "providers.yaml").write_text(
+        "providers:\n"
+        "  - name: qwen\n"
+        "    type: openai\n"
+        "    model: qwen3.6-plus\n"
+        "    api_key_env: OPENAI_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_dir / "agent.yaml")
+
+    assert settings.mem0 is not None
+    assert settings.mem0.enabled is True
+    assert settings.mem0.mode == "sdk"
+    assert settings.mem0.agent_id == "custom-agent"
+    assert settings.mem0.api_key_env == "MEM0_API_KEY"
+    assert settings.mem0.base_url == "http://localhost:8888"
+    assert settings.mem0.org_id == "test-org"
+    assert settings.mem0.project_id == "test-project"
+    assert settings.mem0.vector_store_path == (workspace_dir / "custom-qdrant").resolve()
+    assert settings.mem0.history_db_path == (workspace_dir / "custom-history.db").resolve()
+
+
 def test_load_settings_resolves_workspace_and_default_provider(tmp_path: Path) -> None:
     """验证 happy path：主配置和 provider 配置能被拼成 Settings。"""
 

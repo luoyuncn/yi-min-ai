@@ -38,6 +38,7 @@ def test_reminder_create_with_delay_uses_current_runtime_time(tmp_path: Path) ->
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )
@@ -77,6 +78,7 @@ def test_reminder_create_accepts_string_delay_seconds(tmp_path: Path) -> None:
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )
@@ -112,6 +114,7 @@ def test_reminder_create_rejects_past_absolute_time_without_persisting(tmp_path:
         channel="feishu",
         channel_instance="feishu",
         session_id="oc_current",
+        thread_key="feishu:feishu:oc_current",
         sender="ou_user",
         metadata={},
     )

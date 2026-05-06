@@ -18,3 +18,4 @@ class ToolDefinition:
     schema: dict[str, Any]
     handler: Callable[..., str]
     accepts_context: bool = False
+    visibility_tags: tuple[str, ...] = ("general",)

@@ -43,6 +43,14 @@ def test_system_prompt_prioritizes_immediate_context_for_elliptical_followups() 
     assert "优先承接上一轮助手回复" in prompt
 
 
+def test_system_prompt_forbids_fake_tool_claims_and_unverified_memory_confirms() -> None:
+    prompt = _build_system_prompt("Yi Min")
+
+    assert "未实际调用工具时，不得声称" in prompt
+    assert "如果用户追问信息来源" in prompt
+    assert "不要用“记住了”" in prompt
+
+
 def test_workspace_init_uses_default_soul_template(tmp_path) -> None:
     _ensure_workspace_files(tmp_path)
 

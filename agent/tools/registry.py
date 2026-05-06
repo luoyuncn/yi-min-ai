@@ -24,6 +24,7 @@ from agent.tools.builtin.fitness_tools import (
     fitness_workout_recent,
 )
 from agent.tools.builtin.file_ops import file_read, file_write
+from agent.tools.builtin.identity_tools import assistant_identity_update, profile_core_update
 from agent.tools.builtin.ledger_tools import (
     ledger_commit_draft,
     ledger_get_active_draft,
@@ -31,7 +32,13 @@ from agent.tools.builtin.ledger_tools import (
     ledger_summary,
     ledger_upsert_draft,
 )
-from agent.tools.builtin.memory_tools import memory_forget, memory_list_recent, memory_search, profile_write, recall_memory
+from agent.tools.builtin.memory_tools import (
+    memory_forget,
+    memory_list_recent,
+    memory_search,
+    profile_write,
+    recall_memory,
+)
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.reminder_tools import reminder_create, reminder_delete, reminder_list
 from agent.tools.builtin.session_tools import read_skill, search_sessions
@@ -52,28 +59,37 @@ class ToolRegistry:
 
         self._tools[tool.name] = tool
 
-    def names(self) -> list[str]:
+    def names(self, visibility_tags: set[str] | None = None) -> list[str]:
         """返回已注册的工具名列表。"""
 
-        return list(self._tools.keys())
+        return [tool.name for tool in self._iter_tools(visibility_tags)]
 
     def get(self, name: str) -> ToolDefinition:
         """按名称取出工具定义。"""
 
         return self._tools[name]
 
-    def get_schemas(self) -> list[dict]:
+    def get_schemas(self, visibility_tags: set[str] | None = None) -> list[dict]:
         """把所有工具转换成统一的 schema 列表。"""
 
-        return [tool.schema for tool in self._tools.values()]
+        return [tool.schema for tool in self._iter_tools(visibility_tags)]
 
-    def get_index(self) -> str:
+    def get_index(self, visibility_tags: set[str] | None = None) -> str:
         """生成给模型阅读的工具索引。"""
 
         lines = ["可用工具："]
-        for tool in self._tools.values():
+        for tool in self._iter_tools(visibility_tags):
             lines.append(f"- {tool.name}: {tool.description}")
         return "\n".join(lines)
+
+    def _iter_tools(self, visibility_tags: set[str] | None = None) -> list[ToolDefinition]:
+        if not visibility_tags:
+            return list(self._tools.values())
+        return [
+            tool
+            for tool in self._tools.values()
+            if set(tool.visibility_tags).intersection(visibility_tags)
+        ]
 
 
 def build_stage1_registry(
@@ -82,8 +98,11 @@ def build_stage1_registry(
     session_archive,
     skill_loader,
     mflow_bridge=None,
+    identity_store=None,
     ledger_store=None,
     note_store=None,
+    profile_store=None,
+    mem0_memory_service=None,
     memory_store=None,
     runtime_services: RuntimeServices | None = None,
     enable_shell: bool = False,
@@ -109,6 +128,24 @@ def build_stage1_registry(
     registry = ToolRegistry()
     root = Path(workspace_dir)
 
+    registry.register(
+        ToolDefinition(
+            name="assistant_identity_update",
+            description="结构化更新助手身份，并同步投影到 `SOUL.md`。",
+            schema=_schema(
+                "assistant_identity_update",
+                "更新助手身份",
+                {
+                    "name": _optional_string_field("助手名称"),
+                    "backstory": _optional_string_field("助手背景设定"),
+                    "style": _optional_string_field("助手说话或行为风格"),
+                    "principles": _optional_array_field("助手原则列表"),
+                },
+                required=[],
+            ),
+            handler=partial(assistant_identity_update, identity_store),
+        )
+    )
     registry.register(
         ToolDefinition(
             name="file_read",
@@ -168,6 +205,7 @@ def build_stage1_registry(
                 required=[],
             ),
             handler=partial(fitness_profile_update, root),
+            accepts_context=True,
         )
     )
     registry.register(
@@ -201,6 +239,7 @@ def build_stage1_registry(
                 required=[],
             ),
             handler=partial(fitness_settings_update, root),
+            accepts_context=True,
         )
     )
     registry.register(
@@ -344,6 +383,22 @@ def build_stage1_registry(
     )
     registry.register(
         ToolDefinition(
+            name="profile_core_update",
+            description="结构化更新核心用户资料，并同步投影到 `PROFILE.md`。",
+            schema=_schema(
+                "profile_core_update",
+                "更新核心用户资料",
+                {
+                    "display_name": _optional_string_field("用户称呼"),
+                    "core_facts": _optional_array_field("核心事实列表"),
+                },
+                required=[],
+            ),
+            handler=partial(profile_core_update, profile_store),
+        )
+    )
+    registry.register(
+        ToolDefinition(
             name="profile_write",
             description="替换 `PROFILE.md` 内容，并在下一轮对话生效。",
             schema=_schema("profile_write", "替换 PROFILE.md", {"content": _string_field("用户档案内容")}),
@@ -359,7 +414,8 @@ def build_stage1_registry(
                 "搜索长期记忆",
                 {"query": _string_field("搜索关键词"), "limit": _integer_field("结果数量上限")},
             ),
-            handler=partial(memory_search, memory_store),
+            handler=partial(memory_search, memory_store, mem0_memory_service),
+            accepts_context=True,
         )
     )
     registry.register(
@@ -371,7 +427,8 @@ def build_stage1_registry(
                 "列出最近长期记忆",
                 {"limit": _integer_field("结果数量上限")},
             ),
-            handler=partial(memory_list_recent, memory_store),
+            handler=partial(memory_list_recent, memory_store, mem0_memory_service),
+            accepts_context=True,
         )
     )
     registry.register(
@@ -383,7 +440,8 @@ def build_stage1_registry(
                 "遗忘一条长期记忆",
                 {"memory_id": _string_field("记忆 id")},
             ),
-            handler=partial(memory_forget, memory_store),
+            handler=partial(memory_forget, memory_store, mem0_memory_service),
+            accepts_context=True,
         )
     )
     registry.register(
@@ -654,7 +712,52 @@ def build_stage1_registry(
             )
         )
 
+    _assign_visibility_tags(registry)
     return registry
+
+
+def _assign_visibility_tags(registry: ToolRegistry) -> None:
+    visibility_by_tool_name = {
+        "assistant_identity_update": ("general", "identity"),
+        "file_read": ("general",),
+        "file_write": ("general",),
+        "fitness_profile_get": ("fitness",),
+        "fitness_profile_update": ("fitness",),
+        "fitness_settings_get": ("fitness",),
+        "fitness_settings_update": ("fitness",),
+        "fitness_workout_append": ("fitness",),
+        "fitness_workout_recent": ("fitness",),
+        "fitness_audit_recent": ("fitness",),
+        "ledger_upsert_draft": ("bookkeeping",),
+        "ledger_get_active_draft": ("bookkeeping",),
+        "ledger_commit_draft": ("bookkeeping",),
+        "ledger_query_entries": ("bookkeeping",),
+        "ledger_summary": ("bookkeeping",),
+        "profile_core_update": ("general", "identity"),
+        "profile_write": ("general", "identity"),
+        "memory_search": ("general", "identity"),
+        "memory_list_recent": ("general", "identity"),
+        "memory_forget": ("general", "identity"),
+        "search_sessions": ("general",),
+        "note_add": ("notes",),
+        "note_search": ("notes",),
+        "note_list_recent": ("notes",),
+        "note_update": ("notes",),
+        "read_skill": ("always",),
+        "cron_create_task": ("scheduling",),
+        "cron_update_task": ("scheduling",),
+        "cron_list_tasks": ("scheduling",),
+        "cron_delete_task": ("scheduling",),
+        "cron_run_now": ("scheduling",),
+        "reminder_create": ("scheduling",),
+        "reminder_list": ("scheduling",),
+        "reminder_delete": ("scheduling",),
+        "recall_memory": ("general", "identity"),
+        "shell_exec": ("general",),
+        "web_search": ("general", "current_events"),
+    }
+    for tool_name, tool in registry._tools.items():
+        tool.visibility_tags = visibility_by_tool_name.get(tool_name, ("general",))
 
 
 def _schema(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -719,6 +822,10 @@ def _optional_integer_field(description: str) -> dict:
 
 def _optional_boolean_field(description: str) -> dict:
     return {"type": ["boolean", "null"], "description": description}
+
+
+def _optional_array_field(description: str) -> dict:
+    return {"type": ["array", "null"], "items": {"type": "string"}, "description": description}
 
 
 def _boolean_field(description: str) -> dict:

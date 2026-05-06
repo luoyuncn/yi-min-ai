@@ -11,6 +11,7 @@ class RuntimeServices:
 
     cron_scheduler: Any | None = None
     reminder_scheduler: Any | None = None
+    fitness_change_store: Any | None = None
 
 
 @dataclass(slots=True)
@@ -22,5 +23,6 @@ class RuntimeToolContext:
     channel: str
     channel_instance: str
     session_id: str
+    thread_key: str
     sender: str | None
     metadata: dict

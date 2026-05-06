@@ -98,6 +98,21 @@ class MflowSettings:
 
 
 @dataclass(slots=True)
+class Mem0Settings:
+    """Mem0 运行配置。"""
+
+    enabled: bool = False
+    mode: str = "sdk"
+    agent_id: str = "yi-min"
+    api_key_env: str = "MEM0_API_KEY"
+    base_url: str | None = None
+    org_id: str | None = None
+    project_id: str | None = None
+    vector_store_path: Path | None = None
+    history_db_path: Path | None = None
+
+
+@dataclass(slots=True)
 class ShellToolSettings:
     """Shell tool exposure and approval behavior."""
 
@@ -153,5 +168,6 @@ class Settings:
     providers: ProviderSettings
     channels: ChannelSettings | None = None
     mflow: MflowSettings | None = None
+    mem0: Mem0Settings | None = None
     tools: ToolSettings | None = None
     observability: ObservabilitySettings | None = None

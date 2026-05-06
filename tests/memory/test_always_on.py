@@ -29,3 +29,15 @@ def test_always_on_memory_can_read_legacy_memory_when_profile_is_missing(tmp_pat
 
     assert "legacy preference" in store.load_profile()
 
+
+def test_always_on_memory_reads_generated_soul_and_profile_files(tmp_path: Path) -> None:
+    soul = tmp_path / "SOUL.md"
+    profile = tmp_path / "PROFILE.md"
+    soul.write_text("# SOUL.md\n\n你是银月。\n", encoding="utf-8")
+    profile.write_text("# User Profile\n- 称呼：腿哥\n", encoding="utf-8")
+
+    store = AlwaysOnMemory(soul_file=soul, profile_file=profile)
+
+    assert "银月" in store.load_soul()
+    assert "腿哥" in store.load_profile()
+

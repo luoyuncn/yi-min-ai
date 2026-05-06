@@ -205,6 +205,21 @@ class FitnessFileStore:
         items.reverse()
         return items
 
+    def missing_profile_fields(self) -> list[str]:
+        profile = self.get_profile().get("training_profile", {})
+        required = [
+            ("goal", "训练目标"),
+            ("level", "训练水平"),
+            ("equipment", "器械条件"),
+            ("plan_style", "训练分化"),
+        ]
+        missing: list[str] = []
+        for key, label in required:
+            value = profile.get(key)
+            if value is None or value == "":
+                missing.append(label)
+        return missing
+
     def append_audit(self, event_type: str, payload: dict) -> None:
         event = {
             "timestamp": datetime.now().astimezone().isoformat(),

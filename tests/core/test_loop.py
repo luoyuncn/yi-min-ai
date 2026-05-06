@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 from agent.core.loop import AgentCore
 from agent.gateway.normalizer import NormalizedMessage
+from agent.memory.memory_extractor import MemoryExtractor
+from agent.memory.mem0_service import Mem0MemoryService
 from agent.memory.memory_store import MemoryStore
 
 
@@ -183,6 +185,83 @@ class CapturingProviderManager:
         return type("Resp", (), {"type": "text", "text": "好的，已记住。", "tool_calls": None})()
 
 
+class RoutingAwareProviderManager:
+    def __init__(self, route_text: str, final_text: str = "好的") -> None:
+        self.route_text = route_text
+        self.final_text = final_text
+        self.requests = []
+
+    async def call(self, request):
+        self.requests.append(request)
+        first_content = request.messages[0]["content"] if request.messages else ""
+        if "你是工具可见性路由器" in first_content:
+            return type("Resp", (), {"type": "text", "text": self.route_text, "tool_calls": None})()
+        return type("Resp", (), {"type": "text", "text": self.final_text, "tool_calls": None})()
+
+
+class FixedTextProviderManager:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.requests = []
+
+    async def call(self, request):
+        self.requests.append(request)
+        return type("Resp", (), {"type": "text", "text": self.text, "tool_calls": None})()
+
+
+class ChatAndMemoryProviderManager:
+    def __init__(self, *, chat_text: str, memory_text: str) -> None:
+        self.chat_text = chat_text
+        self.memory_text = memory_text
+        self.requests = []
+
+    async def call(self, request):
+        self.requests.append(request)
+        first_message = request.messages[0] if request.messages else {}
+        first_content = first_message.get("content", "")
+        text = self.memory_text if "你是长期记忆抽取器" in first_content else self.chat_text
+        return type("Resp", (), {"type": "text", "text": text, "tool_calls": None})()
+
+
+class FakeMem0Client:
+    def __init__(self) -> None:
+        self.get_all_calls: list[dict] = []
+
+    def search(self, query: str, **kwargs):
+        return [{"id": "m1", "memory": "用户喜欢 Tims 冷萃美式。"}]
+
+    def get_all(self, **kwargs):
+        self.get_all_calls.append(kwargs)
+        return [{"id": "m1", "memory": "用户喜欢 Tims 冷萃美式。"}]
+
+    def add(self, messages, **kwargs):
+        return {"results": [{"id": "m1"}]}
+
+
+class EmptyMem0Client:
+    def __init__(self) -> None:
+        self.get_all_calls: list[dict] = []
+
+    def search(self, query: str, **kwargs):
+        return []
+
+    def get_all(self, **kwargs):
+        self.get_all_calls.append(kwargs)
+        return []
+
+    def add(self, messages, **kwargs):
+        return {"results": []}
+
+
+class FakeMem0WriteClient:
+    def __init__(self) -> None:
+        self.add_calls: list[dict] = []
+
+    def add(self, messages, **kwargs):
+        self.add_calls.append({"messages": messages, **kwargs})
+        return {"results": [{"id": "m1"}]}
+
+
 class BlockingMemoryExtractor:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -257,7 +336,7 @@ def test_agent_core_can_query_ledger_entries_for_follow_up_item(tmp_path: Path) 
     result = core.run_sync(message)
 
     assert result == "Tims 已在今天账本里。"
-    assert len(provider.requests) == 2
+    assert len(provider.requests) == 3
     tool_messages = [message for message in provider.requests[-1].messages if message.get("role") == "tool"]
     assert tool_messages
     assert "Tims" in tool_messages[0]["content"]
@@ -375,6 +454,368 @@ def test_agent_core_extracts_and_injects_memory_items(tmp_path: Path) -> None:
     assert "ou-user-1" in second_system_content
 
 
+def test_agent_core_routes_tool_visibility_before_main_model_call(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = RoutingAwareProviderManager(route_text="fitness")
+    core = AgentCore.build_for_test(workspace, provider)
+
+    message = NormalizedMessage(
+        message_id="msg-routing-fitness",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="帮我安排今天的胸肩三头训练",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    assert len(provider.requests) == 2
+    main_request = provider.requests[-1]
+    visible_names = {tool["function"]["name"] for tool in main_request.tools}
+    system_content = main_request.messages[0]["content"]
+
+    assert "fitness_profile_get" in visible_names
+    assert "fitness_workout_append" in visible_names
+    assert "read_skill" in visible_names
+    assert "ledger_summary" not in visible_names
+    assert "note_add" not in visible_names
+    assert "[工具索引]" not in system_content
+    assert "[技能索引]" in system_content
+
+
+def test_agent_core_prefers_mem0_memory_results_in_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=FakeMem0Client())
+    core = AgentCore.build_for_test(workspace, provider, mem0_memory_service=mem0_service)
+
+    message = NormalizedMessage(
+        message_id="msg-recall-mem0",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我喜欢喝什么？",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    system_content = provider.requests[-1].messages[0]["content"]
+    assert "[检索到的长期记忆]" in system_content
+    assert "Tims 冷萃美式" in system_content
+
+
+def test_agent_core_logs_mem0_memory_context_injection(tmp_path: Path, caplog) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=FakeMem0Client())
+    core = AgentCore.build_for_test(workspace, provider, mem0_memory_service=mem0_service)
+    caplog.set_level(logging.INFO, logger="agent.core.loop")
+
+    message = NormalizedMessage(
+        message_id="msg-memory-context-log-hit",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我喜欢喝什么？",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    assert "event=memory_context_search_started" in caplog.text
+    assert "event=memory_context_search_completed" in caplog.text
+    assert "说明=已完成长期记忆检索并注入上下文" in caplog.text
+
+
+def test_agent_core_logs_empty_mem0_memory_context_injection(tmp_path: Path, caplog) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=EmptyMem0Client())
+    core = AgentCore.build_for_test(workspace, provider, mem0_memory_service=mem0_service)
+    caplog.set_level(logging.INFO, logger="agent.core.loop")
+
+    message = NormalizedMessage(
+        message_id="msg-memory-context-log-empty",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我老婆是谁？",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    assert "event=memory_context_search_started" in caplog.text
+    assert "event=memory_context_search_empty" in caplog.text
+    assert "说明=未检索到可注入的长期记忆" in caplog.text
+
+
+def test_agent_core_falls_back_to_recent_mem0_memories_when_search_is_empty(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+
+    class SearchEmptyRecentHitClient(EmptyMem0Client):
+        def get_all(self, **kwargs):
+            self.get_all_calls.append(kwargs)
+            return [{"id": "m2", "memory": "用户是 AI Agent 开发工程师。"}]
+
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=SearchEmptyRecentHitClient())
+    core = AgentCore.build_for_test(workspace, provider, mem0_memory_service=mem0_service)
+
+    message = NormalizedMessage(
+        message_id="msg-memory-context-recent-fallback",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我是做什么的",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    system_content = provider.requests[-1].messages[0]["content"]
+    assert "AI Agent 开发工程师" in system_content
+
+
+def test_agent_core_falls_back_to_local_memory_when_mem0_has_no_client(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    memory_store = MemoryStore(workspace / "agent.db")
+    memory_store.add_item(
+        kind="preference",
+        title="咖啡偏好",
+        content="用户喜欢 Tims 冷萃美式。",
+        source_thread_id="chat-1",
+        source_message_id="msg-1",
+        source_sender_id="ou-user-1",
+    )
+    provider = CapturingProviderManager()
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=None)
+    core = AgentCore.build_for_test(
+        workspace,
+        provider,
+        mem0_memory_service=mem0_service,
+        memory_store=memory_store,
+    )
+
+    message = NormalizedMessage(
+        message_id="msg-recall-fallback",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我喜欢喝什么？",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    system_content = provider.requests[-1].messages[0]["content"]
+    assert "Tims 冷萃美式" in system_content
+
+
+def test_agent_core_writes_extracted_memory_to_mem0_when_enabled(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = CapturingProviderManager()
+    client = FakeMem0WriteClient()
+    mem0_service = Mem0MemoryService(enabled=True, agent_id="yi-min", client=client)
+    core = AgentCore.build_for_test(workspace, provider, mem0_memory_service=mem0_service)
+
+    message = NormalizedMessage(
+        message_id="msg-remember-mem0",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="记住我喜欢 Tims 冷萃美式",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    core.run_sync(message)
+
+    assert client.add_calls == [
+        {
+            "messages": "我喜欢 Tims 冷萃美式",
+            "user_id": "ou-user-1",
+            "agent_id": "yi-min",
+            "run_id": "feishu:feishu:chat-1",
+            "infer": False,
+            "metadata": {
+                "kind": "preference",
+                "title": "偏好",
+                "confidence": 0.9,
+                "importance": "medium",
+                "source_thread_id": "feishu:feishu:chat-1",
+                "source_message_id": "msg-remember-mem0",
+                "source_sender_id": "ou-user-1",
+            },
+        }
+    ]
+
+
+def test_agent_core_rewrites_fake_tool_claim_when_no_tool_was_called(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = FixedTextProviderManager(
+        "腿哥，我是通过 `memory_list_recent` 工具查询的。\n\n它直接读取了系统底层的长期记忆存储区。"
+    )
+    core = AgentCore.build_for_test(workspace, provider)
+
+    message = NormalizedMessage(
+        message_id="msg-fake-tool-claim",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="你是从哪里查询的",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    result = core.run_sync(message)
+
+    assert "memory_list_recent" not in result
+    assert "根据现有记录" in result
+    assert "没有额外查别的" in result
+
+
+def test_agent_core_softens_unverified_memory_confirmation_without_tool_call(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = FixedTextProviderManager("腿哥，记住了。你儿子叫罗一一。\n\n这份牵挂，我记下了。")
+    core = AgentCore.build_for_test(workspace, provider)
+
+    message = NormalizedMessage(
+        message_id="msg-memory-confirm",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我儿子叫罗一一",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    result = core.run_sync(message)
+
+    assert "记住了" not in result
+    assert "我记下了" not in result
+    assert result == "知道了。"
+
+
+def test_agent_core_softens_long_term_memory_claim_without_verified_write(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = FixedTextProviderManager(
+        "腿哥，这条信息已经记在长期记忆里了。\n\n你儿子叫罗一一。无需重复，我未曾遗忘。"
+    )
+    core = AgentCore.build_for_test(workspace, provider)
+
+    message = NormalizedMessage(
+        message_id="msg-memory-long-term-claim",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我儿子叫罗一一",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    result = core.run_sync(message)
+
+    assert "记在长期记忆里了" not in result
+    assert "未曾遗忘" not in result
+    assert result == "知道了。"
+
+
+def test_agent_core_logs_memory_extraction_path_for_explicit_fact_turn(tmp_path: Path, caplog) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True)
+    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
+    (workspace / "PROFILE.md").write_text("# User Profile\n", encoding="utf-8")
+    provider = ChatAndMemoryProviderManager(
+        chat_text="我收到了这条信息。",
+        memory_text=(
+            '{"memories":[{"kind":"relationship","title":"家庭信息","content":"用户儿子叫罗一一。",'
+            '"confidence":0.94,"importance":"high"}]}'
+        ),
+    )
+    core = AgentCore.build_for_test(workspace, provider, memory_store=MemoryStore(workspace / "agent.db"))
+    core.memory_extractor = MemoryExtractor(provider_manager=provider)
+
+    message = NormalizedMessage(
+        message_id="msg-memory-log-path",
+        session_id="chat-1",
+        sender="ou-user-1",
+        body="我儿子叫罗一一",
+        attachments=[],
+        channel="feishu",
+        channel_instance="feishu",
+        metadata={"chat_type": "p2p"},
+    )
+
+    caplog.set_level(logging.INFO, logger="agent.core.loop")
+    caplog.set_level(logging.INFO, logger="agent.memory.memory_extractor")
+
+    core.run_sync(message)
+
+    assert "event=memory_extraction_scheduled" in caplog.text
+    assert "event=memory_extract_llm_started" in caplog.text
+    assert "event=memory_extract_completed method=llm" in caplog.text
+
+
 def test_agent_core_runs_memory_extraction_in_background(tmp_path: Path) -> None:
     """记忆抽取不应阻塞本轮 RunFinishedEvent。"""
 
@@ -416,7 +857,8 @@ def test_agent_core_runs_memory_extraction_in_background(tmp_path: Path) -> None
 
     finished_event = asyncio.run(run_and_release_memory_task())
 
-    assert finished_event.result_text == "好的，已记住。"
+    assert finished_event.result_text
+    assert finished_event.result_text == "知道了。"
 
 
 def test_agent_core_limits_long_history_in_model_context(tmp_path: Path) -> None:

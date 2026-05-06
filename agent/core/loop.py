@@ -18,7 +18,18 @@ from uuid import uuid4
 from agent.core.compaction import CompactionEngine
 from agent.core.context import ContextAssembler
 from agent.core.provider import LLMRequest, LLMResponse, LLMStreamChunk
-from agent.memory import AlwaysOnMemory, LedgerStore, MemoryExtractor, MemoryStore, NoteStore, SessionArchive, TurnData
+from agent.memory import (
+    AlwaysOnMemory,
+    IdentityStore,
+    LedgerStore,
+    MemoryExtractor,
+    Mem0MemoryService,
+    MemoryStore,
+    NoteStore,
+    ProfileStore,
+    SessionArchive,
+    TurnData,
+)
 from agent.observability.react_log import ReactTraceLogger
 from agent.observability.langfuse_tracer import NoopObservation
 from agent.observability.tracing import elapsed_ms, ensure_trace_id, monotonic_now, text_preview, trace_fields
@@ -45,6 +56,16 @@ from agent.web.runtime_state import PendingApprovalStore, RunControl, RunInterru
 
 logger = logging.getLogger(__name__)
 
+_TOOL_VISIBILITY_ROUTES = (
+    "general",
+    "fitness",
+    "bookkeeping",
+    "notes",
+    "scheduling",
+    "current_events",
+    "identity",
+)
+
 
 class AgentCore:
     """把各个子系统串起来的核心运行器。"""
@@ -55,11 +76,14 @@ class AgentCore:
         workspace_dir: Path,
         provider_manager,
         always_on_memory: AlwaysOnMemory,
+        identity_store: IdentityStore | None = None,
+        profile_store: ProfileStore | None = None,
         session_archive: SessionArchive,
         session_manager: SessionManager,
         skill_loader: SkillLoader,
         ledger_store: LedgerStore | None = None,
         note_store: NoteStore | None = None,
+        mem0_memory_service: Mem0MemoryService | None = None,
         memory_store: MemoryStore | None = None,
         memory_extractor: MemoryExtractor | None = None,
         react_logger: ReactTraceLogger | None = None,
@@ -77,6 +101,8 @@ class AgentCore:
         self.workspace_dir = Path(workspace_dir)
         self.provider_manager = provider_manager
         self.always_on_memory = always_on_memory
+        self.identity_store = identity_store
+        self.profile_store = profile_store
         self.session_archive = session_archive
         self.session_manager = session_manager
         self.skill_loader = skill_loader
@@ -87,6 +113,7 @@ class AgentCore:
         self.max_iterations = max_iterations
         self.context_history_turns = context_history_turns
         self.note_store = note_store
+        self.mem0_memory_service = mem0_memory_service
         self.memory_store = memory_store
         self.memory_extractor = memory_extractor
         self._background_tasks: set[asyncio.Task] = set()
@@ -103,8 +130,11 @@ class AgentCore:
             session_archive=self.session_archive,
             skill_loader=self.skill_loader,
             mflow_bridge=self.mflow_bridge,
+            identity_store=self.identity_store,
             ledger_store=self.ledger_store,
             note_store=self.note_store,
+            profile_store=self.profile_store,
+            mem0_memory_service=self.mem0_memory_service,
             memory_store=self.memory_store,
             runtime_services=self.runtime_services,
             enable_shell=enable_shell,
@@ -197,6 +227,14 @@ class AgentCore:
                     yield event
                 return
 
+            fitness_reply = self._handle_fitness_flow_guard(session, message)
+            if fitness_reply is not None:
+                session.append({"id": message.message_id, "role": "user", "content": message.body})
+                assistant_message_id = str(uuid4())
+                session.append({"id": assistant_message_id, "role": "assistant", "content": fitness_reply})
+                yield RunFinishedEvent(thread_id=thread_id, run_id=run_id, result_text=fitness_reply)
+                return
+
             with self._trace_start_span(
                 "context.assemble",
                 input={"user_message": message.body, "history_messages": len(session.history)},
@@ -205,11 +243,23 @@ class AgentCore:
                 # 历史消息先裁剪再进入模型，避免长会话把旧身份、旧工具结果、
                 # 大块 tool payload 全量带回当前轮，既省 token 也减少“旧人设复活”。
                 selected_history = self._select_history_for_context(session.history, user_message=message.body)
+                tool_route, visibility_tags = await self._select_tool_visibility(
+                    selected_history,
+                    user_message=message.body,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    channel=message.channel,
+                )
+                visible_tools = self.tool_registry.get_schemas(visibility_tags=visibility_tags)
                 context = self.context_assembler.assemble(
                     soul_text=self.always_on_memory.load_soul(),
                     memory_text=self.always_on_memory.load_profile(),
-                    memory_items_text=self._build_memory_items_text(message.body),
-                    tool_index=self.tool_registry.get_index(),
+                    memory_items_text=self._build_memory_items_text(
+                        user_message=message.body,
+                        sender_id=message.sender,
+                        thread_id=thread_id,
+                    ),
+                    tool_index="",
                     skill_index=self.skill_loader.get_index(),
                     history=selected_history,
                     user_message=message.body,
@@ -223,7 +273,8 @@ class AgentCore:
                         "context_messages": len(context),
                         "history_messages_used": len(selected_history),
                         "context_tokens": self.context_assembler.count_context_tokens(context),
-                        "tool_count": len(self.tool_registry.get_schemas()),
+                        "tool_count": len(visible_tools),
+                        "tool_route": tool_route,
                     }
                 )
             logger.info(
@@ -231,7 +282,7 @@ class AgentCore:
                 f"event=context_assembled context_messages={len(context)} "
                 f"history_messages_used={len(selected_history)} "
                 f"context_tokens={self.context_assembler.count_context_tokens(context)} "
-                f"tool_count={len(self.tool_registry.get_schemas())}"
+                f"tool_count={len(visible_tools)} tool_route={tool_route}"
             )
             # 当前用户消息既要进入本次模型上下文，也要落进会话历史。
             session.append({"id": message.message_id, "role": "user", "content": message.body})
@@ -239,6 +290,7 @@ class AgentCore:
             async for event in self._run_loop(
                 session,
                 context,
+                visible_tools=visible_tools,
                 thread_id=thread_id,
                 run_id=run_id,
                 message_metadata=metadata,
@@ -296,6 +348,7 @@ class AgentCore:
         session,
         context: list[dict],
         *,
+        visible_tools: list[dict],
         thread_id: str,
         run_id: str,
         message_metadata: dict,
@@ -335,7 +388,7 @@ class AgentCore:
 
             # request.tools 是模型可见的 function schema；schema 文案会影响模型
             # 是否正确选择工具，所以工具描述尽量明确业务边界。
-            request = LLMRequest(messages=context, tools=self.tool_registry.get_schemas())
+            request = LLMRequest(messages=context, tools=visible_tools)
             assistant_message_id = str(uuid4())
             streamed_text_parts: list[str] = []
             response: LLMResponse | None = None
@@ -414,6 +467,13 @@ class AgentCore:
             finalized_text = self._finalize_streamed_text(streamed_text, response.text)
             if finalized_text != response.text:
                 response = self._coerce_response(response, text=finalized_text)
+            safe_response_text = self._apply_truthfulness_guard(
+                user_message=user_message,
+                assistant_text=response.text or "",
+                tool_calls=response.tool_calls or [],
+            )
+            if safe_response_text != (response.text or ""):
+                response = self._coerce_response(response, text=safe_response_text)
             model_ms = elapsed_ms(model_started_at)
             message_metadata["timing_model_ms_total"] += model_ms
             usage = response.usage or {}
@@ -692,6 +752,149 @@ class AgentCore:
 
         return ""
 
+    def _apply_truthfulness_guard(
+        self,
+        *,
+        user_message: str,
+        assistant_text: str,
+        tool_calls: list[dict],
+    ) -> str:
+        if not assistant_text or tool_calls:
+            return assistant_text
+
+        if self._contains_fake_tool_claim(assistant_text):
+            return (
+                "我刚才是根据现有记录和这轮对话直接回答的，"
+                "这一轮没有额外查别的。"
+            )
+
+        if self._should_soften_unverified_memory_confirmation(
+            user_message=user_message,
+            assistant_text=assistant_text,
+        ):
+            return "知道了。"
+
+        return assistant_text
+
+    async def _select_tool_visibility(
+        self,
+        history: list[dict],
+        *,
+        user_message: str,
+        thread_id: str,
+        run_id: str,
+        channel: str,
+    ) -> tuple[str, set[str]]:
+        route = "general"
+        request = LLMRequest(
+            messages=self._build_tool_router_messages(history, user_message=user_message),
+            max_tokens=24,
+            temperature=0,
+        )
+        try:
+            response = await self.provider_manager.call(request)
+            route = self._parse_tool_route(response.text or "")
+        except Exception as exc:
+            logger.warning(
+                f"{trace_fields({'trace_id': ''}, session_id=thread_id, channel=channel, run_id=run_id)} "
+                f"event=tool_visibility_route_failed error={exc}"
+            )
+        visibility_tags = {"always", route}
+        visible_count = len(self.tool_registry.get_schemas(visibility_tags=visibility_tags))
+        logger.info(
+            f"{trace_fields({'trace_id': ''}, session_id=thread_id, channel=channel, run_id=run_id)} "
+            f"event=tool_visibility_route_selected route={route} visible_tool_count={visible_count}"
+        )
+        return route, visibility_tags
+
+    def _build_tool_router_messages(self, history: list[dict], *, user_message: str) -> list[dict]:
+        recent_lines: list[str] = []
+        for item in history[-4:]:
+            role = item.get("role")
+            content = (item.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            compact = " ".join(content.split())
+            recent_lines.append(f"{role}: {compact[:200]}")
+        history_block = "\n".join(recent_lines) if recent_lines else "无"
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是工具可见性路由器。"
+                    "只根据当前用户请求和最近对话，选择一个最小工具域。"
+                    "候选路由只有：general, fitness, bookkeeping, notes, scheduling, current_events, identity。\n"
+                    "判定规则：\n"
+                    "- fitness：训练、健身、恢复、动作、训练计划、训练记录。\n"
+                    "- bookkeeping：收入、支出、报销、消费、转账、记账、账本统计。\n"
+                    "- notes：明确要求记笔记、查笔记、更新笔记、长期笔记库。\n"
+                    "- scheduling：提醒、闹钟、cron、定时执行、稍后提醒。\n"
+                    "- current_events：当前新闻、最新价格、天气、政策、今日信息、需要联网核验的新鲜事实。\n"
+                    "- identity：助手身份、用户称呼、用户核心资料、记忆来源追问。\n"
+                    "- general：其他情况，包括通用问答、文件操作、普通任务。\n"
+                    "输出要求：只输出一个路由名，不要解释。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"最近对话：\n{history_block}\n\n当前用户消息：{user_message}",
+            },
+        ]
+
+    def _parse_tool_route(self, text: str) -> str:
+        normalized = (text or "").strip().lower()
+        patterns = {
+            "current_events": r"\bcurrent[_ -]?events\b",
+            "bookkeeping": r"\bbookkeeping\b",
+            "scheduling": r"\bscheduling\b",
+            "identity": r"\bidentity\b",
+            "fitness": r"\bfitness\b",
+            "notes": r"\bnotes\b",
+            "general": r"\bgeneral\b",
+        }
+        for route in _TOOL_VISIBILITY_ROUTES:
+            pattern = patterns[route]
+            if re.search(pattern, normalized):
+                return route
+        return "general"
+
+    def _contains_fake_tool_claim(self, assistant_text: str) -> bool:
+        patterns = [
+            r"通过\s*`?[\w-]+`?\s*工具查询",
+            r"通过\s*`?[\w-]+`?\s*工具",
+            r"调用了\s*`?[\w-]+`?\s*工具",
+        ]
+        return any(re.search(pattern, assistant_text) for pattern in patterns)
+
+    def _should_soften_unverified_memory_confirmation(self, *, user_message: str, assistant_text: str) -> bool:
+        phrases = (
+            "记住了",
+            "已记住",
+            "我记下了",
+            "这份牵挂，我记下了",
+            "我会记住",
+            "记在长期记忆里了",
+            "写进长期记忆了",
+            "存进长期记忆了",
+            "存入长期记忆了",
+            "已写入长期记忆",
+            "已存入长期记忆",
+            "未曾遗忘",
+        )
+        return any(phrase in assistant_text for phrase in phrases)
+
+    def _is_explicit_memory_save_request(self, user_message: str) -> bool:
+        patterns = (
+            "记住",
+            "帮我记",
+            "替我记",
+            "请记下",
+            "记一下",
+            "存成记忆",
+            "写进长期记忆",
+        )
+        return any(pattern in (user_message or "") for pattern in patterns)
+
     def _is_tool_failure_result(self, result: str) -> bool:
         if (result or "").startswith("Tool execution failed:"):
             return True
@@ -884,14 +1087,17 @@ class AgentCore:
             yield ToolCallArgsEvent(tool_call_id=tool_call["id"], delta=args_json)
 
             tool_exec_started_at = monotonic_now()
+            tool_metadata = dict(message_metadata)
+            tool_metadata["runtime_services"] = self.runtime_services
             tool_context = RuntimeToolContext(
                 workspace_dir=self.workspace_dir,
                 run_id=run_id,
                 channel=channel,
                 channel_instance=channel_instance,
                 session_id=session_id,
+                thread_key=thread_id,
                 sender=sender,
-                metadata=message_metadata,
+                metadata=tool_metadata,
             )
             tool_trace_cm = self._trace_start_tool(
                 f"tool.{tool_call['name']}",
@@ -1046,6 +1252,7 @@ class AgentCore:
         async for event in self._run_loop(
             session,
             context,
+            visible_tools=self.tool_registry.get_schemas(),
             thread_id=thread_id,
             run_id=run_id,
             message_metadata=message_metadata,
@@ -1097,9 +1304,41 @@ class AgentCore:
             flush_async()
 
     def _requires_approval(self, tool_name: str) -> bool:
-        if tool_name in {"file_write", "profile_write"}:
+        if tool_name in {
+            "assistant_identity_update",
+            "file_write",
+            "profile_core_update",
+            "profile_write",
+        }:
             return True
         return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
+
+    def _handle_fitness_flow_guard(self, session, message) -> str | None:
+        change_store = getattr(self.runtime_services, "fitness_change_store", None)
+        text = (message.body or "").strip()
+        normalized = text.lower()
+
+        if change_store is not None:
+            pending = change_store.get(message.thread_key, sender=message.sender)
+            if pending is not None:
+                if normalized in {"确认", "同意", "confirm", "yes", "y"}:
+                    from agent.fitness import FitnessFileStore
+
+                    store = FitnessFileStore(self.workspace_dir)
+                    if pending.target == "profile":
+                        store.update_profile(**pending.updates)
+                        message_text = f"已更新健身档案：{pending.summary}"
+                    else:
+                        store.update_settings(**pending.updates)
+                        message_text = f"已更新健身设定：{pending.summary}"
+                    change_store.clear(message.thread_key, sender=message.sender)
+                    return message_text
+                if normalized in {"取消", "算了", "cancel", "no", "n"}:
+                    summary = pending.summary
+                    change_store.clear(message.thread_key, sender=message.sender)
+                    return f"已取消本次健身变更：{summary}"
+
+        return None
 
     def _select_history_for_context(self, history: list[dict], *, user_message: str = "") -> list[dict]:
         """Keep the model context bounded while preserving recent complete turns."""
@@ -1209,10 +1448,94 @@ class AgentCore:
             return False
         return any(name in text for name in stale_names)
 
-    def _build_memory_items_text(self, user_message: str) -> str:
+    def _build_memory_items_text(self, *, user_message: str, sender_id: str | None, thread_id: str) -> str:
+        if self.mem0_memory_service is not None and self.mem0_memory_service.is_ready:
+            user_scope = sender_id or "unknown"
+            logger.info(
+                "event=memory_context_search_started backend=mem0 thread_id=%s sender=%s query=%r "
+                "说明=开始检索长期记忆并准备注入当前上下文",
+                thread_id,
+                user_scope,
+                user_message,
+            )
+            outcome = self.mem0_memory_service.search(
+                user_message,
+                user_id=user_scope,
+                run_id=thread_id,
+            )
+            rows = outcome.get("results") or []
+            source = "search"
+            if not outcome.get("ok"):
+                logger.warning(
+                    "event=memory_context_search_failed backend=mem0 thread_id=%s sender=%s query=%r error=%s "
+                    "说明=长期记忆检索失败，准备回退最近记忆",
+                    thread_id,
+                    user_scope,
+                    user_message,
+                    outcome.get("error"),
+                )
+            if not rows:
+                fallback = self.mem0_memory_service.get_all(user_id=user_scope, top_k=5)
+                if fallback.get("ok"):
+                    rows = fallback.get("results") or []
+                    if rows:
+                        source = "recent_fallback"
+                else:
+                    logger.warning(
+                        "event=memory_context_recent_failed backend=mem0 thread_id=%s sender=%s query=%r error=%s "
+                        "说明=最近长期记忆回退也失败了",
+                        thread_id,
+                        user_scope,
+                        user_message,
+                        fallback.get("error"),
+                    )
+            context_block = self.mem0_memory_service.build_context_block_from_rows(rows, top_k=5)
+            hit_count = sum(1 for line in context_block.splitlines() if line.strip())
+            if hit_count:
+                logger.info(
+                    "event=memory_context_search_completed backend=mem0 thread_id=%s sender=%s query=%r "
+                    "hit_count=%s chars=%s source=%s 说明=已完成长期记忆检索并注入上下文",
+                    thread_id,
+                    user_scope,
+                    user_message,
+                    hit_count,
+                    len(context_block),
+                    source,
+                )
+            else:
+                logger.info(
+                    "event=memory_context_search_empty backend=mem0 thread_id=%s sender=%s query=%r "
+                    "说明=未检索到可注入的长期记忆",
+                    thread_id,
+                    user_scope,
+                    user_message,
+                )
+            return context_block
+        if self.mem0_memory_service is not None:
+            logger.info(
+                "event=memory_context_search_unavailable backend=mem0 thread_id=%s sender=%s query=%r "
+                "说明=长期记忆服务当前不可用，准备回退本地存储",
+                thread_id,
+                sender_id or "unknown",
+                user_message,
+            )
         if self.memory_store is None:
+            logger.info(
+                "event=memory_context_search_unavailable backend=local_store thread_id=%s sender=%s query=%r "
+                "说明=没有可用的本地长期记忆存储",
+                thread_id,
+                sender_id or "unknown",
+                user_message,
+            )
             return ""
 
+        logger.info(
+            "event=memory_context_search_started backend=local_store thread_id=%s sender=%s query=%r "
+            "说明=开始从本地存储检索长期记忆并准备注入当前上下文",
+            thread_id,
+            sender_id or "unknown",
+            user_message,
+        )
         rows = []
         seen_ids: set[str] = set()
         for row in self.memory_store.list_recent(limit=5, kind="profile"):
@@ -1229,10 +1552,29 @@ class AgentCore:
             rows.append(row)
             seen_ids.add(row["id"])
 
-        return "\n".join(
+        context_block = "\n".join(
             f"- {row['kind']}: {row['title']} - {row['content']}"
             for row in rows[:8]
         )
+        if context_block:
+            logger.info(
+                "event=memory_context_search_completed backend=local_store thread_id=%s sender=%s query=%r "
+                "hit_count=%s chars=%s 说明=已完成本地长期记忆检索并注入上下文",
+                thread_id,
+                sender_id or "unknown",
+                user_message,
+                min(len(rows), 8),
+                len(context_block),
+            )
+        else:
+            logger.info(
+                "event=memory_context_search_empty backend=local_store thread_id=%s sender=%s query=%r "
+                "说明=本地存储中没有可注入的长期记忆",
+                thread_id,
+                sender_id or "unknown",
+                user_message,
+            )
+        return context_block
 
     def _schedule_memory_extraction(
         self,
@@ -1243,9 +1585,32 @@ class AgentCore:
         source_message_id: str,
         sender_id: str | None,
     ) -> None:
-        if self.memory_store is None or self.memory_extractor is None:
+        if self.memory_extractor is None:
+            logger.info(
+                "event=memory_extraction_not_scheduled reason=extractor_unavailable "
+                "thread_id=%s source_message_id=%s 说明=未调度长期记忆抽取，原因是抽取器不可用",
+                thread_id,
+                source_message_id,
+            )
+            return
+        if self.memory_store is None and (self.mem0_memory_service is None or not self.mem0_memory_service.is_ready):
+            logger.info(
+                "event=memory_extraction_not_scheduled reason=no_memory_backend "
+                "thread_id=%s source_message_id=%s 说明=未调度长期记忆抽取，原因是没有可用存储后端",
+                thread_id,
+                source_message_id,
+            )
             return
 
+        logger.info(
+            "event=memory_extraction_scheduled thread_id=%s source_message_id=%s sender=%s "
+            "user_preview=%s assistant_chars=%s 说明=已调度后台长期记忆抽取任务",
+            thread_id,
+            source_message_id,
+            sender_id or "unknown",
+            text_preview(user_message),
+            len(assistant_text or ""),
+        )
         task = asyncio.create_task(
             self._extract_memories(
                 user_message=user_message,
@@ -1274,10 +1639,19 @@ class AgentCore:
         source_message_id: str,
         sender_id: str | None,
     ) -> None:
-        if self.memory_store is None or self.memory_extractor is None:
+        if self.memory_extractor is None:
+            return
+        if self.memory_store is None and (self.mem0_memory_service is None or not self.mem0_memory_service.is_ready):
             return
 
         try:
+            logger.info(
+                "event=memory_extraction_started thread_id=%s source_message_id=%s sender=%s "
+                "说明=后台长期记忆抽取任务已开始执行",
+                thread_id,
+                source_message_id,
+                sender_id or "unknown",
+            )
             extract_async = getattr(self.memory_extractor, "extract_async", None)
             if extract_async is not None:
                 candidates = await extract_async(
@@ -1296,6 +1670,76 @@ class AgentCore:
                     message_id=source_message_id,
                     sender_id=sender_id,
                 )
+            if not candidates:
+                logger.info(
+                    "event=memory_extraction_completed thread_id=%s source_message_id=%s candidate_count=0 "
+                    "说明=长期记忆抽取完成，但没有得到可写入候选项",
+                    thread_id,
+                    source_message_id,
+                )
+                return
+
+            logger.info(
+                "event=memory_extraction_completed thread_id=%s source_message_id=%s candidate_count=%s kinds=%s "
+                "说明=长期记忆抽取完成，已得到可写入候选项",
+                thread_id,
+                source_message_id,
+                len(candidates),
+                ",".join(candidate.kind for candidate in candidates),
+            )
+
+            if self.mem0_memory_service is not None and self.mem0_memory_service.is_ready:
+                logger.info(
+                    "event=memory_write_started target=mem0 thread_id=%s source_message_id=%s memory_count=%s "
+                    "说明=开始写入 mem0 长期记忆存储",
+                    thread_id,
+                    source_message_id,
+                    len(candidates),
+                )
+                outcome = self.mem0_memory_service.add_memory_items(
+                    [
+                        {
+                            "kind": candidate.kind,
+                            "title": candidate.title,
+                            "content": candidate.content,
+                            "confidence": candidate.confidence,
+                            "importance": candidate.importance,
+                            "source_thread_id": candidate.source_thread_id,
+                            "source_message_id": candidate.source_message_id,
+                            "source_sender_id": candidate.source_sender_id,
+                        }
+                        for candidate in candidates
+                    ],
+                    user_id=sender_id or "unknown",
+                    run_id=thread_id,
+                )
+                if outcome.get("ok"):
+                    logger.info(
+                        "event=memory_write_completed target=mem0 thread_id=%s source_message_id=%s memory_count=%s "
+                        "说明=已完成 mem0 长期记忆写入",
+                        thread_id,
+                        source_message_id,
+                        len(candidates),
+                    )
+                    self.react_logger.record(
+                        "memory_write",
+                        thread_id=thread_id,
+                        source_message_id=source_message_id,
+                        target="mem0",
+                        memory_count=len(candidates),
+                    )
+                    return
+                logger.warning(
+                    "event=memory_write_failed target=mem0 thread_id=%s source_message_id=%s error=%s "
+                    "说明=写入 mem0 长期记忆失败，准备回退或结束",
+                    thread_id,
+                    source_message_id,
+                    outcome.get("error"),
+                )
+
+            if self.memory_store is None:
+                return
+            local_write_count = 0
             for candidate in candidates:
                 memory_id = self.memory_store.add_item(
                     kind=candidate.kind,
@@ -1307,6 +1751,7 @@ class AgentCore:
                     source_message_id=candidate.source_message_id,
                     source_sender_id=candidate.source_sender_id,
                 )
+                local_write_count += 1
                 self.react_logger.record(
                     "profile_write",
                     thread_id=thread_id,
@@ -1316,6 +1761,13 @@ class AgentCore:
                     title=candidate.title,
                     content=candidate.content,
                 )
+            logger.info(
+                "event=memory_write_completed target=local_store thread_id=%s source_message_id=%s memory_count=%s "
+                "说明=已完成本地长期记忆写入",
+                thread_id,
+                source_message_id,
+                local_write_count,
+            )
         except Exception as exc:
             logger.warning("Memory extraction failed: %s", exc, exc_info=True)
 
@@ -1397,6 +1849,7 @@ class AgentCore:
         workspace_dir: Path,
         provider_manager,
         *,
+        mem0_memory_service: Mem0MemoryService | None = None,
         memory_store: MemoryStore | None = None,
         runtime_services: RuntimeServices | None = None,
         enable_shell: bool = False,
@@ -1418,11 +1871,14 @@ class AgentCore:
                 workspace / "PROFILE.md",
                 legacy_memory_file=workspace / "MEMORY.md",
             ),
+            identity_store=IdentityStore(workspace / "agent.db", workspace / "SOUL.md"),
+            profile_store=ProfileStore(workspace / "agent.db", workspace / "PROFILE.md"),
             session_archive=SessionArchive(workspace / "agent.db"),
             session_manager=SessionManager(workspace / "agent.db"),
             skill_loader=SkillLoader(workspace / "skills"),
             ledger_store=LedgerStore(workspace / "agent.db"),
             note_store=NoteStore(workspace / "agent.db"),
+            mem0_memory_service=mem0_memory_service,
             memory_store=memory_store,
             memory_extractor=MemoryExtractor(),
             runtime_services=runtime_services,

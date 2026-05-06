@@ -14,6 +14,7 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
     )
 
     assert set(registry.names()) == {
+        "assistant_identity_update",
         "file_read",
         "file_write",
         "fitness_profile_get",
@@ -28,6 +29,7 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
         "ledger_query_entries",
         "ledger_summary",
         "ledger_upsert_draft",
+        "profile_core_update",
         "profile_write",
         "memory_search",
         "memory_list_recent",
@@ -55,10 +57,43 @@ def test_stage1_registry_can_render_tool_index(tmp_path) -> None:
     tool_index = registry.get_index()
 
     assert tool_index.startswith("可用工具：")
+    assert "- assistant_identity_update:" in tool_index
     assert "- fitness_profile_get:" in tool_index
     assert "- ledger_upsert_draft:" in tool_index
     assert "- note_add:" in tool_index
+    assert "- profile_core_update:" in tool_index
     assert "- web_search:" in tool_index
+
+
+def test_stage1_registry_can_filter_visible_tools_by_route(tmp_path) -> None:
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+    )
+
+    fitness_names = set(registry.names(visibility_tags={"always", "fitness"}))
+
+    assert "read_skill" in fitness_names
+    assert "fitness_profile_get" in fitness_names
+    assert "fitness_workout_append" in fitness_names
+    assert "ledger_summary" not in fitness_names
+    assert "note_add" not in fitness_names
+    assert "web_search" not in fitness_names
+
+
+def test_stage1_registry_marks_memory_tools_as_context_aware(tmp_path) -> None:
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+    )
+
+    assert registry.get("memory_search").accepts_context is True
+    assert registry.get("memory_list_recent").accepts_context is True
+    assert registry.get("memory_forget").accepts_context is True
 
 
 def test_stage1_registry_only_registers_recall_memory_when_mflow_is_available(tmp_path) -> None:

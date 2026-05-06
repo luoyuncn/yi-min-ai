@@ -105,12 +105,24 @@ class ContextAssembler:
             f"聊天类型：{(metadata or {}).get('chat_type', 'unknown')}",
         ]
         human_block = "\n".join(human_block_lines)
-        memory_items_block = "\n".join(
-            [
-                "[检索到的长期记忆]",
-                memory_items_text.strip() or "本轮没有检索到长期记忆项。",
-            ]
-        )
+        memory_items_value = (memory_items_text or "").strip()
+        if memory_items_value:
+            memory_items_block = "\n".join(
+                [
+                    "[检索到的长期记忆]",
+                    "以下条目是本轮已经成功检索到的长期记忆，可直接视为当前有效事实。",
+                    "当用户问到相关身份、关系、偏好、经历或既有事实时，优先依据这些条目直接回答，不要否认它们存在。",
+                    "若同一事实同时出现中英文或近似重复表述，回答时优先用更自然的中文整合，不要机械复述。",
+                    memory_items_value,
+                ]
+            )
+        else:
+            memory_items_block = "\n".join(
+                [
+                    "[检索到的长期记忆]",
+                    "本轮没有检索到长期记忆项。",
+                ]
+            )
         identity_source_block = "\n".join(
             [
                 "[身份事实来源]",
@@ -131,8 +143,6 @@ class ContextAssembler:
                 memory_text,
                 memory_items_block,
                 reminder_policy_block,
-                "[工具索引]",
-                tool_index,
                 "[技能索引]",
                 skill_index,
             ]
