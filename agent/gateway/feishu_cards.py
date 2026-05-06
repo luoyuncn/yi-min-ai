@@ -10,6 +10,13 @@ import re
 TOOL_NAME_ZH: dict[str, str] = {
     "file_read": "读取文件",
     "file_write": "写入文件",
+    "fitness_profile_get": "查看健身档案",
+    "fitness_profile_update": "更新健身档案",
+    "fitness_settings_get": "查看健身设定",
+    "fitness_settings_update": "更新健身设定",
+    "fitness_workout_append": "记录训练",
+    "fitness_workout_recent": "最近训练",
+    "fitness_audit_recent": "健身追溯日志",
     "ledger_upsert_draft": "记账草稿",
     "ledger_get_active_draft": "查看草稿",
     "ledger_commit_draft": "提交账目",
@@ -90,6 +97,14 @@ class FeishuCardRenderer:
         tool_results: list[dict],
     ) -> dict:
         traces = self._normalize_tool_traces(tool_calls, tool_results)
+
+        fitness_card = self._build_fitness_card_if_applicable(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            traces=traces,
+        )
+        if fitness_card is not None:
+            return fitness_card
 
         ledger_drafts = self._extract_ledger_drafts(traces)
         if ledger_drafts:
@@ -209,6 +224,137 @@ class FeishuCardRenderer:
             ]
         )
         return self._build_card(title=f"{self.agent_name} 回复", template="indigo", elements=elements)
+
+    def _build_fitness_card_if_applicable(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        traces: list[ToolTrace],
+    ) -> dict | None:
+        profile_payload = self._extract_json_payload(traces, "fitness_profile_get")
+        settings_payload = self._extract_json_payload(traces, "fitness_settings_get")
+        if profile_payload or settings_payload:
+            return self._build_fitness_profile_card(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                profile=profile_payload or {},
+                settings=settings_payload or {},
+                traces=traces,
+            )
+
+        workouts = self._extract_fitness_workouts(traces)
+        if workouts:
+            return self._build_recent_fitness_workouts_card(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                workouts=workouts,
+                traces=traces,
+            )
+
+        audit_lines = self._extract_fitness_audit_lines(traces)
+        if audit_lines:
+            return self._build_fitness_audit_card(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                audit_lines=audit_lines,
+                traces=traces,
+            )
+
+        return None
+
+    def _build_fitness_profile_card(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        profile: dict,
+        settings: dict,
+        traces: list[ToolTrace],
+    ) -> dict:
+        training = profile.get("training_profile", {}) if isinstance(profile, dict) else {}
+        coach = profile.get("coach_settings", {}) if isinstance(profile, dict) else {}
+        rpg = settings.get("rpg", {}) if isinstance(settings, dict) else {}
+        world = settings.get("world", {}) if isinstance(settings, dict) else {}
+
+        elements: list[dict] = []
+        self._append_quote_note(elements, user_text)
+        elements.append(self._build_markdown_block(assistant_text))
+        elements.append({"tag": "hr"})
+        elements.append(
+            self._build_fields_block(
+                [
+                    ("称呼 / 目标", f"{training.get('name') or '-'}\n{training.get('goal') or '-'}"),
+                    ("水平 / 计划", f"{training.get('level') or '-'}\n{training.get('plan_style') or '-'}"),
+                    ("主教练", coach.get("primary_coach") or "-"),
+                    ("世界 / 剧情", f"{world.get('world_name') or '-'}\n{self._fitness_story_label(rpg)}"),
+                ]
+            )
+        )
+        panel = self._build_tool_trace_panel(traces)
+        if panel:
+            elements.append({"tag": "hr"})
+            elements.append(panel)
+        elements.append(self._build_note_footer("如需修改目标、教练风格或 RPG 设定，直接告诉我即可。"))
+        return self._build_card(title="健身档案", template="green", elements=elements)
+
+    def _build_recent_fitness_workouts_card(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        workouts: list[dict],
+        traces: list[ToolTrace],
+    ) -> dict:
+        elements: list[dict] = []
+        self._append_quote_note(elements, user_text)
+        elements.append(self._build_markdown_block(assistant_text))
+        elements.append({"tag": "hr"})
+        elements.append(self._build_markdown_block("**最近训练记录**"))
+        for workout in workouts[:5]:
+            title = workout.get("title") or "-"
+            occurred_at = workout.get("occurred_at") or "-"
+            exercises = workout.get("exercises", [])
+            first_exercise = exercises[0] if exercises else "-"
+            duration = workout.get("duration_minutes")
+            elements.append(self._build_markdown_block(f"**{title}**"))
+            elements.append(self._build_markdown_block(f"{first_exercise}"))
+            elements.append(
+                self._build_fields_block(
+                    [
+                        ("训练", f"{title}\n{self._format_occurrence(occurred_at)}"),
+                        ("动作摘要", f"{first_exercise}\n{duration or '-'} 分钟"),
+                    ]
+                )
+            )
+        panel = self._build_tool_trace_panel(traces)
+        if panel:
+            elements.append({"tag": "hr"})
+            elements.append(panel)
+        elements.append(self._build_note_footer("如果你要，我也可以基于这些记录直接给出下一次训练建议。"))
+        return self._build_card(title="最近训练", template="green", elements=elements)
+
+    def _build_fitness_audit_card(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        audit_lines: list[str],
+        traces: list[ToolTrace],
+    ) -> dict:
+        elements: list[dict] = []
+        self._append_quote_note(elements, user_text)
+        elements.append(self._build_markdown_block(assistant_text))
+        elements.append({"tag": "hr"})
+        elements.append(self._build_markdown_block("**最近变更**"))
+        for line in audit_lines[:8]:
+            elements.append(self._build_markdown_block(f"- {line}"))
+        panel = self._build_tool_trace_panel(traces)
+        if panel:
+            elements.append({"tag": "hr"})
+            elements.append(panel)
+        elements.append(self._build_note_footer("这些记录来自 fitness 审计日志，方便你追溯是谁在什么时候改了什么。"))
+        return self._build_card(title="健身追溯日志", template="green", elements=elements)
 
     def _build_follow_up_card(self, *, user_text: str, assistant_text: str, questions: list[str]) -> dict:
         intro = self._strip_question_lines(assistant_text, questions).strip() or "还差一点信息，我确认完就能继续。"
@@ -474,6 +620,60 @@ class FeishuCardRenderer:
                 return parsed
         return None
 
+    def _extract_json_payload(self, traces: list[ToolTrace], tool_name: str) -> dict | None:
+        for trace in traces:
+            if trace.tool_name != tool_name or not trace.result:
+                continue
+            try:
+                payload = json.loads(trace.result)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(payload, dict):
+                return payload
+        return None
+
+    def _extract_fitness_workouts(self, traces: list[ToolTrace]) -> list[dict]:
+        workouts: list[dict] = []
+        pattern = re.compile(r"^## \[(?P<occurred_at>[^\]]+)\] (?P<title>.+)$")
+        for trace in traces:
+            if trace.tool_name != "fitness_workout_recent" or not trace.result:
+                continue
+            current: dict | None = None
+            for raw_line in trace.result.splitlines():
+                line = raw_line.rstrip()
+                match = pattern.match(line)
+                if match:
+                    if current:
+                        workouts.append(current)
+                    current = {
+                        "occurred_at": match.group("occurred_at"),
+                        "title": match.group("title"),
+                        "exercises": [],
+                        "duration_minutes": None,
+                    }
+                    continue
+                if current is None:
+                    continue
+                stripped = line.strip()
+                if stripped.startswith("- duration_minutes:"):
+                    current["duration_minutes"] = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("-") and "exercises" in stripped:
+                    continue
+                elif raw_line.startswith("  -"):
+                    current["exercises"].append(raw_line.strip()[2:].strip())
+                elif stripped.startswith("- "):
+                    current.setdefault("notes", []).append(stripped[2:].strip())
+            if current:
+                workouts.append(current)
+        return workouts
+
+    def _extract_fitness_audit_lines(self, traces: list[ToolTrace]) -> list[str]:
+        for trace in traces:
+            if trace.tool_name != "fitness_audit_recent" or not trace.result:
+                continue
+            return [line.strip() for line in trace.result.splitlines() if line.strip()]
+        return []
+
     def _parse_ledger_query_line(self, line: str) -> dict | None:
         match = re.match(
             r"^\[(?P<occurred_at>[^\]]+)\]\s+(?P<direction>\S+)\s+(?P<amount_cent>\d+)\s+(?P<currency>\S+)\s+(?P<category>\S+)\s+(?P<merchant>.+)$",
@@ -614,6 +814,13 @@ class FeishuCardRenderer:
     def _format_category_label(self, category: str, direction: str) -> str:
         direction_label = "收入" if direction == "income" else "支出"
         return f"{category}\n{direction_label}"
+
+    def _fitness_story_label(self, rpg: dict) -> str:
+        enabled = rpg.get("rpg_enabled")
+        density = rpg.get("story_density") or "-"
+        if enabled:
+            return f"RPG 开启 / {density}"
+        return "RPG 关闭"
 
     def _normalize_question_line(self, line: str) -> str:
         stripped = line.strip()

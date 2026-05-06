@@ -230,3 +230,116 @@ def test_feishu_card_renderer_builds_ledger_report_with_summary_and_five_detail_
         element.get("tag") == "note" and "海底捞" in "".join(item.get("content", "") for item in element.get("elements", []))
         for element in card["elements"]
     )
+
+
+def test_feishu_card_renderer_builds_fitness_profile_card() -> None:
+    renderer = FeishuCardRenderer(agent_name="Yi Min")
+
+    card = renderer.render_final_card(
+        user_text="查看我的健身档案",
+        assistant_text="这是你当前的健身档案概览。",
+        tool_calls=[],
+        tool_results=[
+            {
+                "tool_name": "fitness_profile_get",
+                "content": """{
+  "training_profile": {
+    "name": "腿哥",
+    "goal": "力量提升",
+    "level": "有基础",
+    "plan_style": "PPL"
+  },
+  "coach_settings": {
+    "primary_coach": "凯圣王×谭指导",
+    "encouragement_level": "medium"
+  }
+}""",
+            },
+            {
+                "tool_name": "fitness_settings_get",
+                "content": """{
+  "rpg": {
+    "rpg_enabled": true,
+    "story_density": "low"
+  },
+  "world": {
+    "world_name": "风痕原野"
+  }
+}""",
+            },
+        ],
+    )
+
+    assert card["header"]["title"]["content"] == "健身档案"
+    field_texts = [
+        field["text"]["content"]
+        for element in card["elements"]
+        if element.get("tag") == "div"
+        for field in element.get("fields", [])
+    ]
+    assert any("腿哥" in text for text in field_texts)
+    assert any("力量提升" in text for text in field_texts)
+    assert any("凯圣王×谭指导" in text for text in field_texts)
+    assert any("风痕原野" in text for text in field_texts)
+
+
+def test_feishu_card_renderer_builds_recent_fitness_workouts_card() -> None:
+    renderer = FeishuCardRenderer(agent_name="Yi Min")
+
+    card = renderer.render_final_card(
+        user_text="看看我最近训练",
+        assistant_text="这是你最近的训练记录。",
+        tool_calls=[],
+        tool_results=[
+            {
+                "tool_name": "fitness_workout_recent",
+                "content": """## [2026-05-06T19:30:00+08:00] 推类日
+- exercises:
+  - 卧推 60kg x 5 x 3
+- duration_minutes: 55
+
+## [2026-05-04T18:10:00+08:00] 腿日
+- exercises:
+  - 深蹲 80kg x 5 x 3
+- duration_minutes: 60""",
+            }
+        ],
+    )
+
+    assert card["header"]["title"]["content"] == "最近训练"
+    body_text = "\n".join(
+        element["text"]["content"]
+        for element in card["elements"]
+        if element.get("tag") == "div" and "text" in element
+    )
+    assert "推类日" in body_text
+    assert "卧推 60kg x 5 x 3" in body_text
+    assert "腿日" in body_text
+
+
+def test_feishu_card_renderer_builds_fitness_audit_card() -> None:
+    renderer = FeishuCardRenderer(agent_name="Yi Min")
+
+    card = renderer.render_final_card(
+        user_text="看看最近健身变更记录",
+        assistant_text="这是最近的健身追溯日志。",
+        tool_calls=[],
+        tool_results=[
+            {
+                "tool_name": "fitness_audit_recent",
+                "content": """[2026-05-06T19:40:00+08:00] workout_appended: {"title": "推类日"}
+[2026-05-06T19:20:00+08:00] profile_updated: {"updated_fields": {"goal": "力量提升"}}
+[2026-05-06T19:10:00+08:00] settings_updated: {"updated_fields": {"world_name": "风痕原野"}}""",
+            }
+        ],
+    )
+
+    assert card["header"]["title"]["content"] == "健身追溯日志"
+    body_text = "\n".join(
+        element["text"]["content"]
+        for element in card["elements"]
+        if element.get("tag") == "div" and "text" in element
+    )
+    assert "workout_appended" in body_text
+    assert "profile_updated" in body_text
+    assert "风痕原野" in body_text
