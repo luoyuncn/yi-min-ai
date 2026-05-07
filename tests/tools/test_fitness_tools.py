@@ -135,3 +135,37 @@ def test_fitness_profile_update_stages_empty_string_when_clearing_guarded_field(
     staged = pending.get("feishu:feishu:chat-1", sender="user-1")
     assert staged is not None
     assert staged.updates["goal"] == ""
+
+
+def test_fitness_profile_update_skips_guard_when_profile_is_empty(tmp_path: Path) -> None:
+    """首次初始化时档案为空，major fields 应直接写入，不触发确认守卫。"""
+    store = FitnessFileStore(tmp_path)
+    pending = FitnessPendingChangeStore()
+    services = RuntimeServices(fitness_change_store=pending)
+    context = RuntimeToolContext(
+        workspace_dir=tmp_path,
+        run_id="run-init",
+        channel="feishu",
+        channel_instance="feishu",
+        session_id="chat-1",
+        thread_key="feishu:feishu:chat-1",
+        sender="user-1",
+        metadata={"runtime_services": services},
+    )
+
+    result = fitness_profile_update(
+        store,
+        goal="增肌减脂",
+        level="新手",
+        equipment="哑铃、弹力带",
+        context=context,
+    )
+
+    # 应直接写入，不返回"需要确认"
+    assert "需要确认" not in result
+    assert "Updated fitness profile" in result
+    # 档案里应已有数据
+    profile_text = fitness_profile_get(store)
+    assert "增肌减脂" in profile_text
+    # 不应有 pending change
+    assert pending.get("feishu:feishu:chat-1", sender="user-1") is None
