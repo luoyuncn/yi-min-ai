@@ -1631,108 +1631,79 @@ class AgentCore:
         source_message_id: str,
         sender_id: str | None,
     ) -> None:
-        if self.memory_extractor is None:
-            return
         if self.memory_store is None and (self.mem0_memory_service is None or not self.mem0_memory_service.is_ready):
             return
 
         try:
-            logger.info(
-                "event=memory_extraction_started thread_id=%s source_message_id=%s sender=%s "
-                "说明=后台长期记忆抽取任务已开始执行",
-                thread_id,
-                source_message_id,
-                sender_id or "unknown",
-            )
-            extract_async = getattr(self.memory_extractor, "extract_async", None)
-            if extract_async is not None:
-                candidates = await extract_async(
-                    user_message=user_message,
-                    assistant_message=assistant_text,
-                    thread_id=thread_id,
-                    message_id=source_message_id,
-                    sender_id=sender_id,
-                )
-            else:
-                candidates = self.memory_extractor.extract(
-                    user_message=user_message,
-                    assistant_message=assistant_text,
-                    thread_id=thread_id,
-                    message_id=source_message_id,
-                    sender_id=sender_id,
-                )
-            if not candidates:
+            # Pre-filter: skip trivial messages to avoid unnecessary LLM calls
+            text = (user_message or "").strip()
+            if not text:
+                return
+            if self.memory_extractor is not None and not self.memory_extractor._may_contain_durable_memory(text):
                 logger.info(
-                    "event=memory_extraction_completed thread_id=%s source_message_id=%s candidate_count=0 "
-                    "说明=长期记忆抽取完成，但没有得到可写入候选项",
+                    "event=memory_extraction_skipped reason=durability_heuristic "
+                    "thread_id=%s source_message_id=%s 说明=跳过记忆抽取，内容不满足持久记忆条件",
                     thread_id,
                     source_message_id,
                 )
                 return
 
-            logger.info(
-                "event=memory_extraction_completed thread_id=%s source_message_id=%s candidate_count=%s kinds=%s "
-                "说明=长期记忆抽取完成，已得到可写入候选项",
-                thread_id,
-                source_message_id,
-                len(candidates),
-                ",".join(candidate.kind for candidate in candidates),
-            )
-
+            # Primary path: mem0 infer=True (extraction + dedup + conflict resolution)
             if self.mem0_memory_service is not None and self.mem0_memory_service.is_ready:
                 logger.info(
-                    "event=memory_write_started target=mem0 thread_id=%s source_message_id=%s memory_count=%s "
-                    "说明=开始写入 mem0 长期记忆存储",
+                    "event=memory_write_started target=mem0_infer thread_id=%s source_message_id=%s "
+                    "说明=开始 mem0 infer=True 写入",
                     thread_id,
                     source_message_id,
-                    len(candidates),
                 )
-                outcome = self.mem0_memory_service.add_memory_items(
-                    [
-                        {
-                            "kind": candidate.kind,
-                            "title": candidate.title,
-                            "content": candidate.content,
-                            "confidence": candidate.confidence,
-                            "importance": candidate.importance,
-                            "source_thread_id": candidate.source_thread_id,
-                            "source_message_id": candidate.source_message_id,
-                            "source_sender_id": candidate.source_sender_id,
-                        }
-                        for candidate in candidates
-                    ],
+                outcome = self.mem0_memory_service.add_conversation(
+                    user_message=user_message,
+                    assistant_message=assistant_text,
                     user_id=sender_id or "unknown",
                     run_id=thread_id,
                 )
                 if outcome.get("ok"):
                     logger.info(
-                        "event=memory_write_completed target=mem0 thread_id=%s source_message_id=%s memory_count=%s "
-                        "说明=已完成 mem0 长期记忆写入",
+                        "event=memory_write_completed target=mem0_infer thread_id=%s source_message_id=%s "
+                        "说明=mem0 infer=True 写入成功",
                         thread_id,
                         source_message_id,
-                        len(candidates),
                     )
                     self.react_logger.record(
                         "memory_write",
                         thread_id=thread_id,
                         source_message_id=source_message_id,
-                        target="mem0",
-                        memory_count=len(candidates),
+                        target="mem0_infer",
                     )
                     return
                 logger.warning(
-                    "event=memory_write_failed target=mem0 thread_id=%s source_message_id=%s error=%s "
-                    "说明=写入 mem0 长期记忆失败，准备回退或结束",
+                    "event=memory_write_failed target=mem0_infer thread_id=%s source_message_id=%s error=%s "
+                    "说明=mem0 infer=True 写入失败，回退规则提取",
                     thread_id,
                     source_message_id,
                     outcome.get("error"),
                 )
 
-            if self.memory_store is None:
+            # Fallback: rule-based extraction → MemoryStore
+            if self.memory_extractor is None or self.memory_store is None:
                 return
-            local_write_count = 0
+            candidates = self.memory_extractor.extract(
+                user_message=user_message,
+                assistant_message=assistant_text,
+                thread_id=thread_id,
+                message_id=source_message_id,
+                sender_id=sender_id,
+            )
+            if not candidates:
+                logger.info(
+                    "event=memory_extraction_completed thread_id=%s source_message_id=%s candidate_count=0 "
+                    "说明=规则提取未命中任何记忆",
+                    thread_id,
+                    source_message_id,
+                )
+                return
             for candidate in candidates:
-                memory_id = self.memory_store.add_item(
+                self.memory_store.add_item(
                     kind=candidate.kind,
                     title=candidate.title,
                     content=candidate.content,
@@ -1742,22 +1713,12 @@ class AgentCore:
                     source_message_id=candidate.source_message_id,
                     source_sender_id=candidate.source_sender_id,
                 )
-                local_write_count += 1
-                self.react_logger.record(
-                    "profile_write",
-                    thread_id=thread_id,
-                    source_message_id=source_message_id,
-                    memory_id=memory_id,
-                    kind=candidate.kind,
-                    title=candidate.title,
-                    content=candidate.content,
-                )
             logger.info(
                 "event=memory_write_completed target=local_store thread_id=%s source_message_id=%s memory_count=%s "
-                "说明=已完成本地长期记忆写入",
+                "说明=规则提取回退写入本地存储",
                 thread_id,
                 source_message_id,
-                local_write_count,
+                len(candidates),
             )
         except Exception as exc:
             logger.warning("Memory extraction failed: %s", exc, exc_info=True)

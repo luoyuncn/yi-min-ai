@@ -438,6 +438,8 @@ class MemoryExtractor:
         normalized = text.strip()
         if not normalized or normalized.endswith(("?", "？")):
             return False
+        if self._is_small_talk(normalized):
+            return False
         # 对非问句陈述，优先交给 LLM 判断是否值得沉淀为长期记忆；
         # 本地规则只保留为兜底，不再用脆弱关键词替代语义判断。
         return True
