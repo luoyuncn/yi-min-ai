@@ -32,44 +32,25 @@ observability:
     flush_at: 32
     flush_on_run_end: false
 
-# Optional M-flow runtime config.
-# If omitted, M-flow still tries to use the primary provider for LLM,
-# but embedding should be configured explicitly for production use.
-#
-mflow:
-  enabled: false
-  # Omit data_dir to store M-flow data inside each workspace at `workspace_dir/mflow_data`.
-  # Defaults to the current workspace directory name when omitted.
-  dataset_name: "workspace"
-  # Defaults to providers.default_primary when omitted.
-  llm_provider_name: "qwen"
-  embedding:
-    # Reuse the existing qwen provider and keep using OPENAI_API_KEY as the env name.
-    # The env var name does not need to be DASHSCOPE_API_KEY as long as the key value is correct.
-    provider_name: "qwen"
-    model: "text-embedding-v4"
-    # DashScope text-embedding-v4 defaults to 1024 dims and allows at most 10
-    # inputs per batch. If you change dimensions later, rebuild the corresponding
-    # workspace's `mflow_data/` to avoid vector-schema mismatches.
-    dimensions: 1024
-    batch_size: 10
-    # Optional explicit overrides:
-    # api_key_env: "OPENAI_API_KEY"
-    # base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    # dimensions: 1024
-    # batch_size: 10
-
 mem0:
   enabled: true
   # Minimal local SDK mode: no Mem0 server, no dashboard, no extra middleware.
-  # Reuses `providers.default_primary` as the fact-extraction LLM and
-  # reuses `mflow.embedding` as the embedding source for local Qdrant storage.
+  # Reuses `providers.default_primary` as the fact-extraction LLM.
   # `api_key_env` is only used when mode = "server".
   mode: "sdk"
   agent_id: "yi-min"
   api_key_env: "MEM0_API_KEY"
   vector_store_path: "../workspace/mem0_qdrant"
   history_db_path: "../workspace/mem0_history.db"
+  embedding:
+    # Reuse the existing qwen provider (OPENAI_API_KEY env var, DashScope endpoint).
+    provider_name: "qwen"
+    model: "text-embedding-v4"
+    # DashScope text-embedding-v4 defaults to 1024 dims and allows at most 10
+    # inputs per batch. If you change dimensions later, rebuild the corresponding
+    # workspace's `mem0_qdrant/` to avoid vector-schema mismatches.
+    dimensions: 1024
+    batch_size: 10
 
 channels:
   instances:

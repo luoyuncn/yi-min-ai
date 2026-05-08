@@ -71,6 +71,20 @@ class ChannelSettings:
 
 
 @dataclass(slots=True)
+class Mem0EmbeddingSettings:
+    """Embedding model config for mem0 SDK mode (local Qdrant)."""
+
+    provider_name: str | None = None
+    provider_type: str | None = None
+    model: str | None = None
+    api_key_env: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    dimensions: int | None = None
+    batch_size: int | None = None
+
+
+@dataclass(slots=True)
 class Mem0Settings:
     """Mem0 运行配置。"""
 
@@ -83,6 +97,7 @@ class Mem0Settings:
     project_id: str | None = None
     vector_store_path: Path | None = None
     history_db_path: Path | None = None
+    embedding: "Mem0EmbeddingSettings | None" = None
 
 
 @dataclass(slots=True)

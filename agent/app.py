@@ -417,9 +417,10 @@ def _build_mem0_llm_section(settings) -> dict:
 
 
 def _build_mem0_embedder_section(settings) -> tuple[dict, int]:
-    embedding_settings = getattr(settings, "mem0_embedding", None)
+    mem0_settings = getattr(settings, "mem0", None)
+    embedding_settings = getattr(mem0_settings, "embedding", None) if mem0_settings is not None else None
     if embedding_settings is None:
-        raise ValueError("Mem0 SDK requires embedding settings. Configure mem0_embedding in agent.yaml.")
+        raise ValueError("Mem0 SDK requires embedding settings. Configure mem0.embedding in agent.yaml.")
 
     provider_item = (
         _find_provider_item(settings, embedding_settings.provider_name)

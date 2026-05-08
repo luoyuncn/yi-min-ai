@@ -17,6 +17,7 @@ from agent.config.models import (
     ChannelInstanceSettings,
     ChannelSettings,
     LangfuseSettings,
+    Mem0EmbeddingSettings,
     Mem0Settings,
     ObservabilitySettings,
     ProviderConfigItem,
@@ -309,6 +310,23 @@ def _resolve_agent_workspace_dir(
     )
 
 
+def _build_mem0_embedding_settings(data: dict | None) -> "Mem0EmbeddingSettings | None":
+    """解析 mem0.embedding 子配置。"""
+
+    if data is None:
+        return None
+    return Mem0EmbeddingSettings(
+        provider_name=_optional_str(data, "provider_name"),
+        provider_type=_optional_str(data, "provider_type"),
+        model=_optional_str(data, "model"),
+        api_key_env=_optional_str(data, "api_key_env"),
+        base_url=_optional_str(data, "base_url"),
+        api_version=_optional_str(data, "api_version"),
+        dimensions=_optional_int(data, "dimensions"),
+        batch_size=_optional_int(data, "batch_size"),
+    )
+
+
 def _build_mem0_settings(data: dict | None, *, config_dir: Path) -> Mem0Settings:
     """解析可选的 Mem0 配置。"""
 
@@ -344,6 +362,7 @@ def _build_mem0_settings(data: dict | None, *, config_dir: Path) -> Mem0Settings
             history_db_path_text,
             field_name="mem0.history_db_path",
         ),
+        embedding=_build_mem0_embedding_settings(_optional_mapping(data, "embedding")),
     )
 
 
