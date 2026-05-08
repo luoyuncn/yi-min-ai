@@ -149,3 +149,54 @@ def test_mem0_service_builds_context_block_from_recent_fallback_when_search_is_e
     )
 
     assert "AI Agent 开发工程师" in text
+
+
+def test_add_conversation_calls_client_with_infer_true():
+    """add_conversation 应以 infer=True 调用 client.add，传入完整对话消息列表。"""
+    from unittest.mock import MagicMock
+    mock_client = MagicMock()
+    mock_client.add.return_value = {"results": [{"memory": "用户喜欢 Python"}]}
+    service = Mem0MemoryService(enabled=True, agent_id="test-agent", client=mock_client)
+
+    result = service.add_conversation(
+        user_message="我喜欢用 Python 写代码",
+        assistant_message="好的，我记住了",
+        user_id="user-1",
+        run_id="thread-abc",
+    )
+
+    mock_client.add.assert_called_once_with(
+        [
+            {"role": "user", "content": "我喜欢用 Python 写代码"},
+            {"role": "assistant", "content": "好的，我记住了"},
+        ],
+        user_id="user-1",
+        agent_id="test-agent",
+        run_id="thread-abc",
+        infer=True,
+    )
+    assert result["ok"] is True
+
+
+def test_add_conversation_returns_failure_when_disabled():
+    from agent.memory.mem0_service import Mem0MemoryService
+    service = Mem0MemoryService(enabled=False, agent_id="test-agent", client=None)
+    result = service.add_conversation(
+        user_message="x", assistant_message="y", user_id="u", run_id="r"
+    )
+    assert result["ok"] is False
+    assert "disabled" in result["error"]
+
+
+def test_add_conversation_returns_failure_when_client_raises():
+    from unittest.mock import MagicMock
+    from agent.memory.mem0_service import Mem0MemoryService
+    mock_client = MagicMock()
+    mock_client.add.side_effect = RuntimeError("Qdrant unavailable")
+    service = Mem0MemoryService(enabled=True, agent_id="test-agent", client=mock_client)
+
+    result = service.add_conversation(
+        user_message="x", assistant_message="y", user_id="u", run_id="r"
+    )
+    assert result["ok"] is False
+    assert "Qdrant unavailable" in result["error"]

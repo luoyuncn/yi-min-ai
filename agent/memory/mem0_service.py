@@ -71,6 +71,39 @@ class Mem0MemoryService:
             "raw": raw_results,
         }
 
+    def add_conversation(
+        self,
+        *,
+        user_message: str,
+        assistant_message: str,
+        user_id: str,
+        run_id: str,
+    ) -> dict:
+        """Pass a raw conversation turn to mem0 with infer=True.
+
+        mem0 internally extracts facts, deduplicates, and resolves conflicts
+        with existing memories before persisting.
+        """
+        if not self.enabled:
+            return self._failure("Mem0 is disabled")
+        if self.client is None:
+            return self._failure("Mem0 client is not configured")
+        messages = [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ]
+        try:
+            raw = self.client.add(
+                messages,
+                user_id=user_id,
+                agent_id=self.agent_id,
+                run_id=run_id,
+                infer=True,
+            )
+        except Exception as exc:
+            return self._failure(str(exc))
+        return self._success(raw)
+
     def search(self, query: str, *, user_id: str, run_id: str, top_k: int = 5) -> dict:
         if not self.enabled:
             return self._failure("Mem0 is disabled")
