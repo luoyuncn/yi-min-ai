@@ -1503,20 +1503,11 @@ class AgentCore:
                     mem0_rows = fallback.get("results") or []
 
         # Secondary: MemoryStore FTS5 keyword search (sync, < 1 ms)
-        # When mem0 is unavailable, also pull recent items so there is always a baseline.
         if self.memory_store is not None:
             try:
-                fts_rows = self.memory_store.search(user_message, limit=8)
-                seen_ids: set[str] = {row["id"] for row in fts_rows}
-                local_rows = list(fts_rows)
-                if self.mem0_memory_service is None or not self.mem0_memory_service.is_ready:
-                    for kind in ("profile", "preference"):
-                        for row in self.memory_store.list_recent(limit=5, kind=kind):
-                            if row["id"] not in seen_ids:
-                                local_rows.append(row)
-                                seen_ids.add(row["id"])
+                local_rows = self.memory_store.search(user_message, limit=8)
             except Exception as exc:
-                logger.warning("event=memory_fts_search_failed error=%s", exc)
+                logger.warning("event=memory_fts_search_failed error=%s", exc, exc_info=True)
 
         # RRF merge
         merged = _rrf_merge(mem0_rows, local_rows, top_n=5)
