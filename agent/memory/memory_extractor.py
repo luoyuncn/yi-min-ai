@@ -432,6 +432,10 @@ class MemoryExtractor:
     def _is_error_response(self, assistant_message: str) -> bool:
         return "处理您的消息时出错" in assistant_message or "Error code:" in assistant_message
 
+    def may_contain_durable_memory(self, text: str) -> bool:
+        """Public entry point for the durability heuristic (used by AgentCore)."""
+        return self._may_contain_durable_memory(text)
+
     def _may_contain_durable_memory(self, text: str) -> bool:
         if self._extract_nickname(text) or self._extract_preference(text) or self._extract_explicit_fact(text):
             return True

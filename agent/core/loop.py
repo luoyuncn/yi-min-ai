@@ -1639,7 +1639,7 @@ class AgentCore:
             text = (user_message or "").strip()
             if not text:
                 return
-            if self.memory_extractor is not None and not self.memory_extractor._may_contain_durable_memory(text):
+            if self.memory_extractor is not None and not self.memory_extractor.may_contain_durable_memory(text):
                 logger.info(
                     "event=memory_extraction_skipped reason=durability_heuristic "
                     "thread_id=%s source_message_id=%s 说明=跳过记忆抽取，内容不满足持久记忆条件",
