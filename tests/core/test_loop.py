@@ -9,7 +9,6 @@ import logging
 import json
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 from agent.core.loop import AgentCore
 from agent.gateway.normalizer import NormalizedMessage
@@ -138,42 +137,6 @@ def test_agent_core_logs_timeline_for_model_and_tool_execution(tmp_path: Path, c
     assert "event=tool_execution_completed" in log_text
     assert "event=run_timing_summary" in log_text
     assert "event=run_finished" in log_text
-
-
-def test_agent_core_ingest_to_mflow_uses_session_history_without_warning(tmp_path: Path, caplog) -> None:
-    """M-flow 写入不应再依赖不存在的 get_history。"""
-
-    workspace = tmp_path / "workspace"
-    skills_dir = workspace / "skills"
-    skills_dir.mkdir(parents=True)
-    (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
-    (workspace / "MEMORY.md").write_text("# User Profile\n- prefers python\n", encoding="utf-8")
-    (workspace / "notes.txt").write_text("hello", encoding="utf-8")
-    core = AgentCore.build_for_test(workspace, FakeProviderManager())
-
-    ingested: list[object] = []
-
-    async def ingest_turn(turn_data):
-        ingested.append(turn_data)
-
-    core.mflow_bridge = SimpleNamespace(ingest_turn=ingest_turn)
-    caplog.set_level(logging.WARNING, logger="agent.core.loop")
-
-    message = NormalizedMessage(
-        message_id="mflow-msg-1",
-        session_id="cli:default",
-        sender="user",
-        body="读取 notes.txt",
-        attachments=[],
-        channel="cli",
-        metadata={},
-    )
-
-    result = core.run_sync(message)
-
-    assert result == "已读取文件"
-    assert len(ingested) == 1
-    assert "M-flow ingestion failed" not in caplog.text
 
 
 class CapturingProviderManager:

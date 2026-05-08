@@ -11,7 +11,6 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agent.config import load_environment_files, load_settings
@@ -31,12 +30,6 @@ from agent.memory import (
     NoteStore,
     ProfileStore,
     SessionArchive,
-)
-from agent.memory.mflow_bridge import (
-    MflowBridge,
-    MflowEmbeddingConfig,
-    MflowLLMConfig,
-    MflowRuntimeConfig,
 )
 from agent.observability.langfuse_tracer import LangfuseTraceClient, NoopTraceClient
 from agent.session import SessionManager
@@ -271,20 +264,6 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         testing,
     )
 
-    # 初始化 M-flow（可选，失败不阻塞启动）
-    mflow_bridge = None
-    try:
-        logger.info("event=mflow_bridge_starting workspace=%s", workspace_dir)
-        mflow_bridge = await _build_mflow_bridge_async(settings, workspace_dir=workspace_dir)
-        logger.info(
-            "event=mflow_bridge_ready workspace=%s available=%s",
-            workspace_dir,
-            getattr(mflow_bridge, "is_available", False) if mflow_bridge is not None else False,
-        )
-    except Exception as e:
-        logger.warning("event=mflow_bridge_failed workspace=%s error=%s", workspace_dir, e)
-        print(f"Warning: M-flow initialization failed: {e}")
-
     db_path = workspace_dir / "agent.db"
     identity_store = IdentityStore(db_path, workspace_dir / "SOUL.md")
     profile_store = ProfileStore(db_path, workspace_dir / "PROFILE.md")
@@ -311,7 +290,6 @@ async def _build_app_from_settings_async(settings, *, workspace_dir: Path, testi
         mem0_memory_service=mem0_memory_service,
         memory_store=MemoryStore(db_path),
         memory_extractor=MemoryExtractor(provider_manager=provider_manager),
-        mflow_bridge=mflow_bridge,
         trace_client=trace_client,
         runtime_services=runtime_services,
         enable_shell=bool(getattr(shell_settings, "enabled", False)),
@@ -439,10 +417,9 @@ def _build_mem0_llm_section(settings) -> dict:
 
 
 def _build_mem0_embedder_section(settings) -> tuple[dict, int]:
-    mflow_settings = getattr(settings, "mflow", None)
-    embedding_settings = getattr(mflow_settings, "embedding", None)
+    embedding_settings = getattr(settings, "mem0_embedding", None)
     if embedding_settings is None:
-        raise ValueError("Mem0 SDK requires embedding settings. Reuse mflow.embedding to define provider/model.")
+        raise ValueError("Mem0 SDK requires embedding settings. Configure mem0_embedding in agent.yaml.")
 
     provider_item = (
         _find_provider_item(settings, embedding_settings.provider_name)
@@ -669,96 +646,6 @@ def _build_system_prompt(agent_name: str) -> str:
     )
 
 
-async def _build_mflow_bridge_async(settings, *, workspace_dir: Path) -> MflowBridge | None:
-    """根据设置构建并初始化 M-flow bridge。"""
-
-    mflow_settings = getattr(settings, "mflow", None)
-    if mflow_settings is not None and not mflow_settings.enabled:
-        return None
-
-    runtime_config = MflowRuntimeConfig(
-        enabled=True if mflow_settings is None else mflow_settings.enabled,
-        dataset_name=(
-            mflow_settings.dataset_name
-            if mflow_settings is not None and mflow_settings.dataset_name
-            else workspace_dir.name
-        ),
-        llm=_build_mflow_llm_config(settings, provider_name=getattr(mflow_settings, "llm_provider_name", None)),
-        embedding=_build_mflow_embedding_config(settings, mflow_settings),
-        graph_database_provider=(
-            mflow_settings.graph_database_provider if mflow_settings is not None else "kuzu"
-        ),
-        vector_db_provider=(
-            mflow_settings.vector_db_provider if mflow_settings is not None else "lancedb"
-        ),
-    )
-    data_dir = (
-        mflow_settings.data_dir
-        if mflow_settings is not None and mflow_settings.data_dir is not None
-        else workspace_dir / "mflow_data"
-    )
-    bridge = MflowBridge(data_dir=data_dir, runtime_config=runtime_config)
-    await bridge.initialize()
-    return bridge
-
-
-def _build_mflow_llm_config(settings, *, provider_name: str | None = None) -> MflowLLMConfig:
-    """把主 provider 配置映射为 M-flow 可识别的 LLM 配置。"""
-
-    provider_item = _find_provider_item(settings, provider_name or settings.providers.default_primary)
-    return MflowLLMConfig(
-        provider=_map_provider_type_to_mflow(provider_item.provider_type, provider_item.base_url),
-        model=_qualify_llm_model_for_mflow_litellm(
-            provider_type=provider_item.provider_type,
-            model=provider_item.model,
-            base_url=provider_item.base_url,
-        ),
-        api_key_env=provider_item.api_key_env,
-        base_url=provider_item.base_url,
-    )
-
-
-def _build_mflow_embedding_config(settings, mflow_settings) -> MflowEmbeddingConfig | None:
-    """构建 M-flow embedding 配置。"""
-
-    if mflow_settings is None or mflow_settings.embedding is None:
-        return None
-
-    embedding_settings = mflow_settings.embedding
-    provider_item = (
-        _find_provider_item(settings, embedding_settings.provider_name)
-        if embedding_settings.provider_name
-        else None
-    )
-    provider_type = embedding_settings.provider_type or (
-        provider_item.provider_type if provider_item is not None else "openai"
-    )
-    if provider_type not in {"openai", "ollama", "fastembed"}:
-        raise ValueError(
-            "M-flow embedding provider must resolve to openai, ollama, or fastembed-compatible settings"
-        )
-
-    return MflowEmbeddingConfig(
-        provider="openai" if provider_type == "openai" else provider_type,
-        model=_qualify_embedding_model_for_mflow_litellm(
-            provider_type=provider_type,
-            model=embedding_settings.model or (provider_item.model if provider_item is not None else ""),
-            base_url=embedding_settings.base_url if embedding_settings.base_url is not None else (
-                provider_item.base_url if provider_item is not None else None
-            ),
-        ),
-        api_key_env=embedding_settings.api_key_env or (
-            provider_item.api_key_env if provider_item is not None else ""
-        ),
-        base_url=embedding_settings.base_url if embedding_settings.base_url is not None else (
-            provider_item.base_url if provider_item is not None else None
-        ),
-        api_version=embedding_settings.api_version,
-        dimensions=embedding_settings.dimensions,
-        batch_size=embedding_settings.batch_size,
-    )
-
-
 def _find_provider_item(settings, provider_name: str):
     """按名称查找已配置 provider。"""
 
@@ -766,61 +653,3 @@ def _find_provider_item(settings, provider_name: str):
         if item.name == provider_name:
             return item
     raise ValueError(f"Unknown provider: {provider_name}")
-
-
-def _map_provider_type_to_mflow(provider_type: str, base_url: str | None) -> str:
-    """把现有 provider 类型映射为 M-flow 支持的 provider 标识。"""
-
-    if provider_type != "openai":
-        return provider_type
-
-    if not base_url:
-        return "openai"
-
-    host = urlsplit(base_url).netloc.lower()
-    return "openai" if host.endswith("openai.com") else "custom"
-
-
-def _qualify_llm_model_for_mflow_litellm(*, provider_type: str, model: str, base_url: str | None) -> str:
-    """为 LiteLLM 的 chat/completion 路由补齐 provider 前缀。"""
-
-    if provider_type != "openai" or not model or "/" in model:
-        return model
-
-    prefix = _infer_litellm_provider_prefix(base_url)
-    if prefix is None:
-        return model
-    return f"{prefix}/{model}"
-
-
-def _qualify_embedding_model_for_mflow_litellm(*, provider_type: str, model: str, base_url: str | None) -> str:
-    """为 LiteLLM 的 embedding 路由补齐 provider 前缀。"""
-
-    if provider_type != "openai" or not model or "/" in model:
-        return model
-
-    # LiteLLM 对 OpenAI-compatible embedding 端点会走 OpenAI 路由；
-    # 某些 provider-specific 前缀（如 dashscope/...）在 embedding 上并不兼容。
-    if _is_official_openai_endpoint(base_url):
-        return model
-    return f"openai/{model}"
-
-
-def _infer_litellm_provider_prefix(base_url: str | None) -> str | None:
-    """按 endpoint 主机推断 LiteLLM provider 前缀。"""
-
-    if _is_official_openai_endpoint(base_url):
-        return None
-
-    host = urlsplit(base_url).netloc.lower()
-    if host.endswith("deepseek.com"):
-        return "deepseek"
-    if host.endswith("dashscope.aliyuncs.com") or host.endswith("dashscope-intl.aliyuncs.com"):
-        return "dashscope"
-    return "openai"
-
-
-def _is_official_openai_endpoint(base_url: str | None) -> bool:
-    if not base_url:
-        return True
-    return urlsplit(base_url).netloc.lower().endswith("openai.com")

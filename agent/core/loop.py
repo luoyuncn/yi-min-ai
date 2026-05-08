@@ -28,7 +28,6 @@ from agent.memory import (
     NoteStore,
     ProfileStore,
     SessionArchive,
-    TurnData,
 )
 from agent.observability.react_log import ReactTraceLogger
 from agent.observability.langfuse_tracer import NoopObservation
@@ -88,7 +87,6 @@ class AgentCore:
         memory_extractor: MemoryExtractor | None = None,
         react_logger: ReactTraceLogger | None = None,
         trace_client=None,
-        mflow_bridge=None,
         runtime_services: RuntimeServices | None = None,
         enable_shell: bool = False,
         shell_requires_confirmation: bool = True,
@@ -107,7 +105,6 @@ class AgentCore:
         self.session_manager = session_manager
         self.skill_loader = skill_loader
         self.ledger_store = ledger_store
-        self.mflow_bridge = mflow_bridge
         self.runtime_services = runtime_services or RuntimeServices()
         self.shell_requires_confirmation = shell_requires_confirmation
         self.max_iterations = max_iterations
@@ -129,7 +126,6 @@ class AgentCore:
             always_on_memory=self.always_on_memory,
             session_archive=self.session_archive,
             skill_loader=self.skill_loader,
-            mflow_bridge=self.mflow_bridge,
             identity_store=self.identity_store,
             ledger_store=self.ledger_store,
             note_store=self.note_store,
@@ -554,9 +550,6 @@ class AgentCore:
                     sender_id=sender_id,
                 )
 
-                # 异步写入 M-flow（非阻塞）
-                await self._ingest_to_mflow(session, thread_id)
-
                 yield StepFinishedEvent(step_name=step_name)
                 logger.info(
                     f"{trace_fields(message_metadata, session_id=thread_id, channel=channel, run_id=run_id)} "
@@ -655,7 +648,6 @@ class AgentCore:
                     source_message_id=source_message_id,
                     sender_id=sender_id,
                 )
-                await self._ingest_to_mflow(session, thread_id)
 
             yield StepFinishedEvent(step_name=step_name)
             logger.info(
@@ -1660,7 +1652,6 @@ class AgentCore:
                     thread_id=thread_id,
                     message_id=source_message_id,
                     sender_id=sender_id,
-                    existing_memories=self._build_existing_memory_snapshot(),
                 )
             else:
                 candidates = self.memory_extractor.extract(
@@ -1770,78 +1761,6 @@ class AgentCore:
             )
         except Exception as exc:
             logger.warning("Memory extraction failed: %s", exc, exc_info=True)
-
-    def _build_existing_memory_snapshot(self) -> str:
-        if self.memory_store is None:
-            return ""
-
-        rows: list[dict] = []
-        seen_ids: set[str] = set()
-        for kind in ("profile", "preference", "fact", "plan", "constraint", "relationship"):
-            for row in self.memory_store.list_recent(limit=3, kind=kind):
-                if row["id"] in seen_ids:
-                    continue
-                rows.append(row)
-                seen_ids.add(row["id"])
-
-        return "\n".join(
-            f"- {row['kind']}: {row['title']} - {row['content']}"
-            for row in rows[:12]
-        )
-
-    async def _ingest_to_mflow(self, session, thread_id: str) -> None:
-        """异步将最新一轮对话写入 M-flow（非阻塞）"""
-        if self.mflow_bridge is None:
-            return
-
-        try:
-            # 提取最新一轮的用户消息和助手回复
-            messages = list(getattr(session, "history", []))
-            if len(messages) < 2:
-                return
-
-            # 找到最后一个用户消息和助手回复
-            user_msg = None
-            assistant_msg = None
-            tool_calls = []
-
-            for i in range(len(messages) - 1, -1, -1):
-                msg = messages[i]
-                if msg.get("role") == "assistant" and assistant_msg is None:
-                    assistant_msg = msg
-                    if msg.get("tool_calls"):
-                        tool_calls = msg["tool_calls"]
-                elif msg.get("role") == "user" and user_msg is None:
-                    user_msg = msg
-                    break
-
-            if not user_msg or not assistant_msg:
-                return
-
-            from datetime import datetime
-
-            turn_data = TurnData(
-                session_id=thread_id,
-                turn_index=len(messages) // 2,  # 粗略估计轮次
-                timestamp=datetime.now(),
-                user_message=user_msg.get("content", ""),
-                assistant_response=assistant_msg.get("content", ""),
-                tool_calls=[
-                    {
-                        "name": tc.get("function", {}).get("name", ""),
-                        "summary": f"{tc.get('function', {}).get('name', '')}(...)",
-                    }
-                    for tc in tool_calls
-                ] if tool_calls else None,
-            )
-
-            # 异步写入，不等待结果
-            asyncio.create_task(self.mflow_bridge.ingest_turn(turn_data))
-
-        except Exception as e:
-            # 写入失败不应该影响主流程
-            import logging
-            logging.getLogger(__name__).warning(f"M-flow ingestion failed: {e}")
 
     @classmethod
     def build_for_test(

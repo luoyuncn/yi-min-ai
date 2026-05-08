@@ -18,8 +18,6 @@ from agent.config.models import (
     ChannelSettings,
     LangfuseSettings,
     Mem0Settings,
-    MflowEmbeddingSettings,
-    MflowSettings,
     ObservabilitySettings,
     ProviderConfigItem,
     ProviderSettings,
@@ -89,11 +87,6 @@ def load_settings(agent_config_path: Path) -> Settings:
             items=provider_items,
         ),
         channels=channels,
-        mflow=_build_mflow_settings(
-            _optional_mapping(raw, "mflow"),
-            config_dir=config_dir,
-            provider_names=provider_names,
-        ),
         mem0=_build_mem0_settings(_optional_mapping(raw, "mem0"), config_dir=config_dir),
         tools=_build_tool_settings(_optional_mapping(raw, "tools")),
         observability=_build_observability_settings(_optional_mapping(raw, "observability")),
@@ -313,67 +306,6 @@ def _resolve_agent_workspace_dir(
         config_dir,
         workspace_dir,
         field_name="agent.workspace_dir",
-    )
-
-
-def _build_mflow_settings(
-    data: dict | None,
-    *,
-    config_dir: Path,
-    provider_names: set[str],
-) -> MflowSettings:
-    """解析可选的 M-flow 配置。"""
-
-    if data is None:
-        return MflowSettings()
-
-    enabled = _optional_bool(data, "enabled")
-    llm_provider_name = _optional_str(data, "llm_provider_name")
-    if llm_provider_name is not None and llm_provider_name not in provider_names:
-        raise ConfigError("mflow.llm_provider_name must match a configured provider name")
-
-    data_dir_text = _optional_str(data, "data_dir")
-    data_dir = (
-        _resolve_path(config_dir, data_dir_text, field_name="mflow.data_dir")
-        if data_dir_text is not None
-        else None
-    )
-    graph_database_provider = _optional_str(data, "graph_database_provider") or "kuzu"
-    vector_db_provider = _optional_str(data, "vector_db_provider") or "lancedb"
-
-    return MflowSettings(
-        enabled=True if enabled is None else enabled,
-        data_dir=data_dir,
-        dataset_name=_optional_str(data, "dataset_name"),
-        llm_provider_name=llm_provider_name,
-        graph_database_provider=graph_database_provider,
-        vector_db_provider=vector_db_provider,
-        embedding=_build_mflow_embedding_settings(_optional_mapping(data, "embedding"), provider_names),
-    )
-
-
-def _build_mflow_embedding_settings(
-    data: dict | None,
-    provider_names: set[str],
-) -> MflowEmbeddingSettings | None:
-    """解析 M-flow embedding 配置。"""
-
-    if data is None:
-        return None
-
-    provider_name = _optional_str(data, "provider_name")
-    if provider_name is not None and provider_name not in provider_names:
-        raise ConfigError("mflow.embedding.provider_name must match a configured provider name")
-
-    return MflowEmbeddingSettings(
-        provider_name=provider_name,
-        provider_type=_optional_str(data, "provider_type"),
-        model=_optional_str(data, "model"),
-        api_key_env=_optional_str(data, "api_key_env"),
-        base_url=_optional_str(data, "base_url"),
-        api_version=_optional_str(data, "api_version"),
-        dimensions=_optional_int(data, "dimensions"),
-        batch_size=_optional_int(data, "batch_size"),
     )
 
 

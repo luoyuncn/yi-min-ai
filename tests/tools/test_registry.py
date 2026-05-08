@@ -96,28 +96,6 @@ def test_stage1_registry_marks_memory_tools_as_context_aware(tmp_path) -> None:
     assert registry.get("memory_forget").accepts_context is True
 
 
-def test_stage1_registry_only_registers_recall_memory_when_mflow_is_available(tmp_path) -> None:
-    """recall_memory 只应在 M-flow 已可用时暴露给模型。"""
-
-    unavailable_registry = build_stage1_registry(
-        workspace_dir=tmp_path,
-        always_on_memory=None,
-        session_archive=None,
-        skill_loader=None,
-        mflow_bridge=type("Bridge", (), {"is_available": False})(),
-    )
-    available_registry = build_stage1_registry(
-        workspace_dir=tmp_path,
-        always_on_memory=None,
-        session_archive=None,
-        skill_loader=None,
-        mflow_bridge=type("Bridge", (), {"is_available": True})(),
-    )
-
-    assert "recall_memory" not in unavailable_registry.names()
-    assert "recall_memory" in available_registry.names()
-
-
 def test_stage1_registry_exposes_cron_tools_when_scheduler_service_is_available(tmp_path) -> None:
     from agent.tools.runtime_context import RuntimeServices
 

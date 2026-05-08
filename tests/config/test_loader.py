@@ -49,18 +49,6 @@ def test_single_channel_instance_is_not_multi_runtime() -> None:
     assert is_multi_runtime_settings(settings) is False
 
 
-def test_default_configs_disable_mflow_by_default() -> None:
-    """M-flow 太重，默认配置不应把它接进主链路。"""
-
-    local_settings = load_settings(Path("config/agent.yaml"))
-    linux_settings = load_settings(Path("config/agent.linux.yaml"))
-
-    assert local_settings.mflow is not None
-    assert local_settings.mflow.enabled is False
-    assert linux_settings.mflow is not None
-    assert linux_settings.mflow.enabled is False
-
-
 def test_default_configs_include_enabled_mem0_local_mode() -> None:
     """当前默认配置应直接启用最简本地 Mem0 形态。"""
 
@@ -598,63 +586,6 @@ def test_load_settings_allows_omitting_agent_workspace_when_channels_exist(tmp_p
     assert settings.agent.workspace_dir == channel_a_workspace.resolve()
 
 
-def test_load_settings_parses_mflow_embedding_configuration(tmp_path: Path) -> None:
-    """M-flow 配置应能独立解析，并支持 embedding provider 引用。"""
-
-    config_dir = tmp_path / "config"
-    workspace_dir = tmp_path / "workspace"
-    mflow_dir = tmp_path / "mflow-store"
-    config_dir.mkdir()
-    workspace_dir.mkdir()
-    mflow_dir.mkdir()
-
-    (config_dir / "agent.yaml").write_text(
-        "agent:\n"
-        "  name: Yi Min\n"
-        "  workspace_dir: ../workspace\n"
-        "  max_iterations: 8\n"
-        "providers:\n"
-        "  config_file: providers.yaml\n"
-        "  default_primary: deepseek\n"
-        "mflow:\n"
-        "  enabled: true\n"
-        "  data_dir: ../mflow-store\n"
-        "  dataset_name: workspace-memory\n"
-        "  llm_provider_name: deepseek\n"
-        "  embedding:\n"
-        "    provider_name: qwen\n"
-        "    model: text-embedding-v4\n"
-        "    dimensions: 1024\n",
-        encoding="utf-8",
-    )
-    (config_dir / "providers.yaml").write_text(
-        "providers:\n"
-        "  - name: deepseek\n"
-        "    type: openai\n"
-        "    model: deepseek-v4-flash\n"
-        "    api_key_env: DEEPSEEK_API_KEY\n"
-        "    base_url: https://api.deepseek.com/v1\n"
-        "  - name: qwen\n"
-        "    type: openai\n"
-        "    model: qwen3.6-plus\n"
-        "    api_key_env: DASHSCOPE_API_KEY\n"
-        "    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1\n",
-        encoding="utf-8",
-    )
-
-    settings = load_settings(config_dir / "agent.yaml")
-
-    assert settings.mflow is not None
-    assert settings.mflow.enabled is True
-    assert settings.mflow.data_dir == mflow_dir.resolve()
-    assert settings.mflow.dataset_name == "workspace-memory"
-    assert settings.mflow.llm_provider_name == "deepseek"
-    assert settings.mflow.embedding is not None
-    assert settings.mflow.embedding.provider_name == "qwen"
-    assert settings.mflow.embedding.model == "text-embedding-v4"
-    assert settings.mflow.embedding.dimensions == 1024
-
-
 def test_load_settings_expands_environment_variables_in_path_fields(tmp_path: Path, monkeypatch) -> None:
     """路径字段应支持 `${VAR:-fallback}` 形式的环境变量展开。"""
 
@@ -669,10 +600,7 @@ def test_load_settings_expands_environment_variables_in_path_fields(tmp_path: Pa
         "  max_iterations: 8\n"
         "providers:\n"
         "  config_file: providers.yaml\n"
-        "  default_primary: deepseek\n"
-        "mflow:\n"
-        "  enabled: true\n"
-        "  data_dir: ${YIMIN_DATA_ROOT:-../fallback}/mflow\n",
+        "  default_primary: deepseek\n",
         encoding="utf-8",
     )
     (config_dir / "providers.yaml").write_text(
@@ -689,6 +617,4 @@ def test_load_settings_expands_environment_variables_in_path_fields(tmp_path: Pa
     settings = load_settings(config_dir / "agent.yaml")
 
     assert settings.agent.workspace_dir == (state_root / "default").resolve()
-    assert settings.mflow is not None
-    assert settings.mflow.data_dir == (state_root / "mflow").resolve()
 

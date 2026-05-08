@@ -37,7 +37,6 @@ from agent.tools.builtin.memory_tools import (
     memory_list_recent,
     memory_search,
     profile_write,
-    recall_memory,
 )
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.reminder_tools import reminder_create, reminder_delete, reminder_list
@@ -97,7 +96,6 @@ def build_stage1_registry(
     always_on_memory,
     session_archive,
     skill_loader,
-    mflow_bridge=None,
     identity_store=None,
     ledger_store=None,
     note_store=None,
@@ -649,28 +647,6 @@ def build_stage1_registry(
             )
         )
 
-    # M-flow 深度检索（可选）
-    if mflow_bridge is not None and getattr(mflow_bridge, "is_available", False):
-        registry.register(
-            ToolDefinition(
-                name="recall_memory",
-                description=(
-                    "使用 M-flow 图路由进行深度记忆检索。"
-                    "适用于需要因果推理或跨会话关联的复杂问题。"
-                    "示例：`我上周为什么决定不用 Redis？`"
-                ),
-                schema=_schema(
-                    "recall_memory",
-                    "图路由深度记忆检索",
-                    {
-                        "question": _string_field("要检索的问题"),
-                        "top_k": _integer_field("返回的片段数量，默认 3"),
-                    },
-                ),
-                handler=partial(recall_memory, mflow_bridge),
-            )
-        )
-
     # Shell 执行（需审批）
     if enable_shell:
         registry.register(
@@ -752,7 +728,6 @@ def _assign_visibility_tags(registry: ToolRegistry) -> None:
         "reminder_create": ("scheduling",),
         "reminder_list": ("scheduling",),
         "reminder_delete": ("scheduling",),
-        "recall_memory": ("general", "identity"),
         "shell_exec": ("general",),
         "web_search": ("general", "current_events"),
     }
