@@ -513,7 +513,6 @@ def test_agent_core_logs_mem0_memory_context_injection(tmp_path: Path, caplog) -
 
     assert "event=memory_context_search_started" in caplog.text
     assert "event=memory_context_search_completed" in caplog.text
-    assert "说明=已完成长期记忆检索并注入上下文" in caplog.text
 
 
 def test_agent_core_logs_empty_mem0_memory_context_injection(tmp_path: Path, caplog) -> None:
@@ -542,7 +541,6 @@ def test_agent_core_logs_empty_mem0_memory_context_injection(tmp_path: Path, cap
 
     assert "event=memory_context_search_started" in caplog.text
     assert "event=memory_context_search_empty" in caplog.text
-    assert "说明=未检索到可注入的长期记忆" in caplog.text
 
 
 def test_agent_core_falls_back_to_recent_mem0_memories_when_search_is_empty(tmp_path: Path) -> None:
@@ -996,6 +994,98 @@ def test_agent_core_removes_historical_identity_persona_turns_from_model_context
     assert "国藩手中" not in sent_text
     assert "鄙人曾国藩" not in sent_text
     assert "完善你的SOUL" not in sent_text
+
+
+class TestRrfHelpers:
+    def test_rrf_merge_combines_two_sources(self):
+        from agent.core.loop import _rrf_merge
+
+        mem0_rows = [
+            {"memory": "用户喜欢 Python"},
+            {"memory": "用户在北京工作"},
+        ]
+        local_rows = [
+            {"title": "工作", "content": "用户在北京工作"},   # same as mem0[1] — boosts score
+            {"title": "偏好", "content": "用户喜欢深色主题"},
+        ]
+        result = _rrf_merge(mem0_rows, local_rows, top_n=3)
+
+        assert "用户喜欢 Python" in result
+        assert len(result) <= 3
+
+    def test_rrf_merge_empty_sources_returns_empty(self):
+        from agent.core.loop import _rrf_merge
+        assert _rrf_merge([], [], top_n=5) == []
+
+    def test_rrf_text_from_mem0_row_picks_first_nonempty_field(self):
+        from agent.core.loop import _rrf_text_from_mem0_row
+
+        assert _rrf_text_from_mem0_row({"memory": "记忆内容", "content": "其他"}) == "记忆内容"
+        assert _rrf_text_from_mem0_row({"text": "text 字段"}) == "text 字段"
+        assert _rrf_text_from_mem0_row({}) == ""
+
+
+class TestBuildMemoryItemsTextHybrid:
+    def test_hybrid_search_includes_mem0_results(self, tmp_path):
+        from unittest.mock import MagicMock
+        from agent.core.loop import AgentCore
+        from agent.memory.mem0_service import Mem0MemoryService
+
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "results": [{"memory": "用户喜欢深色主题"}]
+        }
+        mem0 = Mem0MemoryService(enabled=True, agent_id="test", client=mock_client)
+
+        core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0)
+        result = core._build_memory_items_text(
+            user_message="主题偏好",
+            sender_id="user-1",
+            thread_id="t1",
+        )
+
+        assert "深色主题" in result
+
+    def test_hybrid_search_includes_fts5_results(self, tmp_path):
+        from unittest.mock import MagicMock
+        from agent.core.loop import AgentCore
+        from agent.memory.mem0_service import Mem0MemoryService
+        from agent.memory.memory_store import MemoryStore
+
+        # mem0 returns nothing
+        mock_client = MagicMock()
+        mock_client.search.return_value = {"results": []}
+        mock_client.get_all.return_value = {"results": []}
+        mem0 = Mem0MemoryService(enabled=True, agent_id="test", client=mock_client)
+
+        # FTS5 has a match
+        store = MemoryStore(tmp_path / "agent.db")
+        store.add_item(kind="fact", title="工作地点", content="用户在上海工作", confidence=0.9)
+
+        core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0, memory_store=store)
+        result = core._build_memory_items_text(
+            user_message="上海",
+            sender_id="user-1",
+            thread_id="t1",
+        )
+
+        assert "上海" in result
+
+    def test_returns_empty_when_no_results(self, tmp_path):
+        from unittest.mock import MagicMock
+        from agent.core.loop import AgentCore
+        from agent.memory.mem0_service import Mem0MemoryService
+
+        mock_client = MagicMock()
+        mock_client.search.return_value = {"results": []}
+        mock_client.get_all.return_value = {"results": []}
+        mem0 = Mem0MemoryService(enabled=True, agent_id="test", client=mock_client)
+
+        core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0)
+        result = core._build_memory_items_text(
+            user_message="随机问题", sender_id="user-1", thread_id="t1"
+        )
+        assert result == ""
 
 
 class TestExtractMemoriesNewPath:

@@ -55,6 +55,36 @@ from agent.web.runtime_state import PendingApprovalStore, RunControl, RunInterru
 
 logger = logging.getLogger(__name__)
 
+
+def _rrf_merge(
+    mem0_rows: list[dict],
+    local_rows: list[dict],
+    *,
+    k: int = 60,
+    top_n: int = 5,
+) -> list[str]:
+    """Reciprocal Rank Fusion: merge two retrieval result lists into ranked text items."""
+    scores: dict[str, float] = {}
+    for rank, row in enumerate(mem0_rows):
+        text = _rrf_text_from_mem0_row(row)
+        if text:
+            scores[text] = scores.get(text, 0.0) + 1.0 / (k + rank + 1)
+    for rank, row in enumerate(local_rows):
+        text = f"{row.get('title', '')} {row.get('content', '')}".strip()
+        if text:
+            scores[text] = scores.get(text, 0.0) + 1.0 / (k + rank + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [text for text, _ in ranked[:top_n]]
+
+
+def _rrf_text_from_mem0_row(row: dict) -> str:
+    for key in ("memory", "content", "text", "summary"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 _TOOL_VISIBILITY_ROUTES = (
     "general",
     "fitness",
@@ -1441,11 +1471,15 @@ class AgentCore:
         return any(name in text for name in stale_names)
 
     def _build_memory_items_text(self, *, user_message: str, sender_id: str | None, thread_id: str) -> str:
+        mem0_rows: list[dict] = []
+        local_rows: list[dict] = []
+        user_scope = sender_id or "unknown"
+
+        # Primary: mem0 semantic vector search
         if self.mem0_memory_service is not None and self.mem0_memory_service.is_ready:
-            user_scope = sender_id or "unknown"
             logger.info(
                 "event=memory_context_search_started backend=mem0 thread_id=%s sender=%s query=%r "
-                "说明=开始检索长期记忆并准备注入当前上下文",
+                "说明=开始 mem0 语义向量检索",
                 thread_id,
                 user_scope,
                 user_message,
@@ -1454,119 +1488,56 @@ class AgentCore:
                 user_message,
                 user_id=user_scope,
                 run_id=thread_id,
+                top_k=8,
             )
-            rows = outcome.get("results") or []
-            source = "search"
-            if not outcome.get("ok"):
+            if outcome.get("ok"):
+                mem0_rows = outcome.get("results") or []
+            else:
                 logger.warning(
-                    "event=memory_context_search_failed backend=mem0 thread_id=%s sender=%s query=%r error=%s "
-                    "说明=长期记忆检索失败，准备回退最近记忆",
-                    thread_id,
-                    user_scope,
-                    user_message,
+                    "event=memory_context_search_failed backend=mem0 error=%s",
                     outcome.get("error"),
                 )
-            if not rows:
-                fallback = self.mem0_memory_service.get_all(user_id=user_scope, top_k=5)
+            if not mem0_rows:
+                fallback = self.mem0_memory_service.get_all(user_id=user_scope, top_k=8)
                 if fallback.get("ok"):
-                    rows = fallback.get("results") or []
-                    if rows:
-                        source = "recent_fallback"
-                else:
-                    logger.warning(
-                        "event=memory_context_recent_failed backend=mem0 thread_id=%s sender=%s query=%r error=%s "
-                        "说明=最近长期记忆回退也失败了",
-                        thread_id,
-                        user_scope,
-                        user_message,
-                        fallback.get("error"),
-                    )
-            context_block = self.mem0_memory_service.build_context_block_from_rows(rows, top_k=5)
-            hit_count = sum(1 for line in context_block.splitlines() if line.strip())
-            if hit_count:
-                logger.info(
-                    "event=memory_context_search_completed backend=mem0 thread_id=%s sender=%s query=%r "
-                    "hit_count=%s chars=%s source=%s 说明=已完成长期记忆检索并注入上下文",
-                    thread_id,
-                    user_scope,
-                    user_message,
-                    hit_count,
-                    len(context_block),
-                    source,
-                )
-            else:
-                logger.info(
-                    "event=memory_context_search_empty backend=mem0 thread_id=%s sender=%s query=%r "
-                    "说明=未检索到可注入的长期记忆",
-                    thread_id,
-                    user_scope,
-                    user_message,
-                )
-            return context_block
-        if self.mem0_memory_service is not None:
+                    mem0_rows = fallback.get("results") or []
+
+        # Secondary: MemoryStore FTS5 keyword search (sync, < 1 ms)
+        # When mem0 is unavailable, also pull recent items so there is always a baseline.
+        if self.memory_store is not None:
+            try:
+                fts_rows = self.memory_store.search(user_message, limit=8)
+                seen_ids: set[str] = {row["id"] for row in fts_rows}
+                local_rows = list(fts_rows)
+                if self.mem0_memory_service is None or not self.mem0_memory_service.is_ready:
+                    for kind in ("profile", "preference"):
+                        for row in self.memory_store.list_recent(limit=5, kind=kind):
+                            if row["id"] not in seen_ids:
+                                local_rows.append(row)
+                                seen_ids.add(row["id"])
+            except Exception as exc:
+                logger.warning("event=memory_fts_search_failed error=%s", exc)
+
+        # RRF merge
+        merged = _rrf_merge(mem0_rows, local_rows, top_n=5)
+        if not merged:
             logger.info(
-                "event=memory_context_search_unavailable backend=mem0 thread_id=%s sender=%s query=%r "
-                "说明=长期记忆服务当前不可用，准备回退本地存储",
+                "event=memory_context_search_empty thread_id=%s sender=%s 说明=混合检索未找到任何长期记忆",
                 thread_id,
-                sender_id or "unknown",
-                user_message,
-            )
-        if self.memory_store is None:
-            logger.info(
-                "event=memory_context_search_unavailable backend=local_store thread_id=%s sender=%s query=%r "
-                "说明=没有可用的本地长期记忆存储",
-                thread_id,
-                sender_id or "unknown",
-                user_message,
+                user_scope,
             )
             return ""
 
         logger.info(
-            "event=memory_context_search_started backend=local_store thread_id=%s sender=%s query=%r "
-            "说明=开始从本地存储检索长期记忆并准备注入当前上下文",
+            "event=memory_context_search_completed thread_id=%s sender=%s "
+            "hit_count=%s mem0_count=%s local_count=%s 说明=混合检索完成并注入上下文",
             thread_id,
-            sender_id or "unknown",
-            user_message,
+            user_scope,
+            len(merged),
+            len(mem0_rows),
+            len(local_rows),
         )
-        rows = []
-        seen_ids: set[str] = set()
-        for row in self.memory_store.list_recent(limit=5, kind="profile"):
-            rows.append(row)
-            seen_ids.add(row["id"])
-        for row in self.memory_store.list_recent(limit=5, kind="preference"):
-            if row["id"] in seen_ids:
-                continue
-            rows.append(row)
-            seen_ids.add(row["id"])
-        for row in self.memory_store.search(user_message, limit=5):
-            if row["id"] in seen_ids:
-                continue
-            rows.append(row)
-            seen_ids.add(row["id"])
-
-        context_block = "\n".join(
-            f"- {row['kind']}: {row['title']} - {row['content']}"
-            for row in rows[:8]
-        )
-        if context_block:
-            logger.info(
-                "event=memory_context_search_completed backend=local_store thread_id=%s sender=%s query=%r "
-                "hit_count=%s chars=%s 说明=已完成本地长期记忆检索并注入上下文",
-                thread_id,
-                sender_id or "unknown",
-                user_message,
-                min(len(rows), 8),
-                len(context_block),
-            )
-        else:
-            logger.info(
-                "event=memory_context_search_empty backend=local_store thread_id=%s sender=%s query=%r "
-                "说明=本地存储中没有可注入的长期记忆",
-                thread_id,
-                sender_id or "unknown",
-                user_message,
-            )
-        return context_block
+        return "\n".join(f"- {text}" for text in merged)
 
     def _schedule_memory_extraction(
         self,
