@@ -467,7 +467,6 @@ async def _run_all(
     logger.info("=" * 60)
     logger.info(f"Web UI: http://127.0.0.1:{web_port}")
     logger.info("Gateway + Heartbeat + Cron 运行中...")
-    logger.info("按 Ctrl+C 停止所有服务")
     logger.info("=" * 60)
 
     # 创建 uvicorn 配置

@@ -1038,11 +1038,11 @@ class TestBuildMemoryItemsTextHybrid:
         mem0 = Mem0MemoryService(enabled=True, agent_id="test", client=mock_client)
 
         core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0)
-        result = core._build_memory_items_text(
+        result = asyncio.run(core._build_memory_items_text(
             user_message="主题偏好",
             sender_id="user-1",
             thread_id="t1",
-        )
+        ))
 
         assert "深色主题" in result
 
@@ -1063,11 +1063,11 @@ class TestBuildMemoryItemsTextHybrid:
         store.add_item(kind="fact", title="工作地点", content="用户在上海工作", confidence=0.9)
 
         core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0, memory_store=store)
-        result = core._build_memory_items_text(
+        result = asyncio.run(core._build_memory_items_text(
             user_message="上海",
             sender_id="user-1",
             thread_id="t1",
-        )
+        ))
 
         assert "上海" in result
 
@@ -1082,9 +1082,9 @@ class TestBuildMemoryItemsTextHybrid:
         mem0 = Mem0MemoryService(enabled=True, agent_id="test", client=mock_client)
 
         core = AgentCore.build_for_test(tmp_path, MagicMock(), mem0_memory_service=mem0)
-        result = core._build_memory_items_text(
+        result = asyncio.run(core._build_memory_items_text(
             user_message="随机问题", sender_id="user-1", thread_id="t1"
-        )
+        ))
         assert result == ""
 
 

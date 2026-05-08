@@ -277,10 +277,11 @@ class AgentCore:
                     channel=message.channel,
                 )
                 visible_tools = self.tool_registry.get_schemas(visibility_tags=visibility_tags)
+                active_skill_content = self._load_active_skill_for_route(tool_route)
                 context = self.context_assembler.assemble(
                     soul_text=self.always_on_memory.load_soul(),
                     memory_text=self.always_on_memory.load_profile(),
-                    memory_items_text=self._build_memory_items_text(
+                    memory_items_text=await self._build_memory_items_text(
                         user_message=message.body,
                         sender_id=message.sender,
                         thread_id=thread_id,
@@ -293,6 +294,7 @@ class AgentCore:
                     channel_instance=message.channel_instance,
                     sender=message.sender,
                     metadata=message.metadata,
+                    active_skill_content=active_skill_content,
                 )
                 context_span.update(
                     output={
@@ -301,6 +303,7 @@ class AgentCore:
                         "context_tokens": self.context_assembler.count_context_tokens(context),
                         "tool_count": len(visible_tools),
                         "tool_route": tool_route,
+                        "active_skill": tool_route if active_skill_content else "",
                     }
                 )
             logger.info(
@@ -808,19 +811,38 @@ class AgentCore:
         channel: str,
     ) -> tuple[str, set[str]]:
         route = "general"
+        router_messages = self._build_tool_router_messages(history, user_message=user_message)
         request = LLMRequest(
-            messages=self._build_tool_router_messages(history, user_message=user_message),
+            messages=router_messages,
             max_tokens=24,
             temperature=0,
         )
+        route_generation_cm = self._trace_start_generation(
+            "llm.route",
+            input=router_messages,
+            metadata={
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "channel": channel,
+                "purpose": "tool_visibility_routing",
+            },
+        )
+        route_observation = route_generation_cm.__enter__()
         try:
             response = await self.provider_manager.call(request)
             route = self._parse_tool_route(response.text or "")
+            route_observation.update(
+                output=response.text or "",
+                metadata={"route": route, "run_id": run_id},
+            )
         except Exception as exc:
+            route_observation.update(level="ERROR", status_message=str(exc))
             logger.warning(
                 f"{trace_fields({'trace_id': ''}, session_id=thread_id, channel=channel, run_id=run_id)} "
                 f"event=tool_visibility_route_failed error={exc}"
             )
+        finally:
+            route_generation_cm.__exit__(None, None, None)
         visibility_tags = {"always", route}
         visible_count = len(self.tool_registry.get_schemas(visibility_tags=visibility_tags))
         logger.info(
@@ -879,6 +901,20 @@ class AgentCore:
             if re.search(pattern, normalized):
                 return route
         return "general"
+
+    _ROUTE_TO_SKILL: dict[str, str] = {
+        "fitness": "fitness-coach",
+    }
+
+    def _load_active_skill_for_route(self, route: str) -> str:
+        skill_name = self._ROUTE_TO_SKILL.get(route)
+        if not skill_name:
+            return ""
+        try:
+            return self.skill_loader.read_full(skill_name)
+        except Exception as exc:
+            logger.debug(f"event=active_skill_load_failed route={route} skill={skill_name} error={exc}")
+            return ""
 
     def _contains_fake_tool_claim(self, assistant_text: str) -> bool:
         patterns = [
@@ -1470,12 +1506,12 @@ class AgentCore:
             return False
         return any(name in text for name in stale_names)
 
-    def _build_memory_items_text(self, *, user_message: str, sender_id: str | None, thread_id: str) -> str:
+    async def _build_memory_items_text(self, *, user_message: str, sender_id: str | None, thread_id: str) -> str:
         mem0_rows: list[dict] = []
         local_rows: list[dict] = []
         user_scope = sender_id or "unknown"
 
-        # Primary: mem0 semantic vector search
+        # Primary: mem0 semantic vector search — run in thread to avoid blocking event loop
         if self.mem0_memory_service is not None and self.mem0_memory_service.is_ready:
             logger.info(
                 "event=memory_context_search_started backend=mem0 thread_id=%s sender=%s query=%r "
@@ -1484,7 +1520,8 @@ class AgentCore:
                 user_scope,
                 user_message,
             )
-            outcome = self.mem0_memory_service.search(
+            outcome = await asyncio.to_thread(
+                self.mem0_memory_service.search,
                 user_message,
                 user_id=user_scope,
                 run_id=thread_id,
@@ -1498,7 +1535,11 @@ class AgentCore:
                     outcome.get("error"),
                 )
             if not mem0_rows:
-                fallback = self.mem0_memory_service.get_all(user_id=user_scope, top_k=8)
+                fallback = await asyncio.to_thread(
+                    self.mem0_memory_service.get_all,
+                    user_id=user_scope,
+                    top_k=8,
+                )
                 if fallback.get("ok"):
                     mem0_rows = fallback.get("results") or []
 
@@ -1618,7 +1659,8 @@ class AgentCore:
                     thread_id,
                     source_message_id,
                 )
-                outcome = self.mem0_memory_service.add_conversation(
+                outcome = await asyncio.to_thread(
+                    self.mem0_memory_service.add_conversation,
                     user_message=user_message,
                     assistant_message=assistant_text,
                     user_id=sender_id or "unknown",

@@ -59,7 +59,7 @@ def fitness_profile_update(
         encouragement_level=encouragement_level,
         interaction_mode=interaction_mode,
     )
-    if _requires_confirmation(staged_updates, _major_profile_fields()) and context is not None:
+    if _profile_update_requires_confirmation(store, staged_updates) and context is not None:
         services = (context.metadata or {}).get("runtime_services")
         change_store = getattr(services, "fitness_change_store", None) if services is not None else None
         if change_store is not None:
@@ -265,6 +265,37 @@ def _major_settings_fields() -> set[str]:
 
 def _requires_confirmation(updates: dict, guarded_fields: set[str]) -> bool:
     return any(key in guarded_fields for key in updates)
+
+
+def _profile_update_requires_confirmation(store: FitnessFileStore, updates: dict) -> bool:
+    guarded_fields = _major_profile_fields()
+    if not _requires_confirmation(updates, guarded_fields):
+        return False
+    if _is_initial_profile_setup(store, updates):
+        return False
+    return True
+
+
+def _is_initial_profile_setup(store: FitnessFileStore, updates: dict) -> bool:
+    if not {"goal", "level", "equipment"}.issubset(updates):
+        return False
+    profile = store.get_profile()
+    training_profile = profile.get("training_profile", {})
+    coach_settings = profile.get("coach_settings", {})
+    if not isinstance(training_profile, dict) or not isinstance(coach_settings, dict):
+        return False
+    tracked_training_fields = {
+        "goal",
+        "level",
+        "equipment",
+        "injuries",
+        "movement_restrictions",
+        "plan_style",
+    }
+    tracked_coach_fields = {"primary_coach", "coach_mix_rules"}
+    return all(training_profile.get(field) in (None, "") for field in tracked_training_fields) and all(
+        coach_settings.get(field) in (None, "") for field in tracked_coach_fields
+    )
 
 
 def _summarize_changes(updates: dict, *, prefix: str) -> str:

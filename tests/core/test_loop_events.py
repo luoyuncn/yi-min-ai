@@ -314,11 +314,11 @@ def test_memory_items_do_not_include_saved_notes_by_default(tmp_path: Path) -> N
     core = AgentCore.build_for_test(workspace, FakeProviderManager())
     core.note_store = note_store
 
-    memory_items = core._build_memory_items_text(
+    memory_items = asyncio.run(core._build_memory_items_text(
         user_message="你是谁",
         sender_id="ou-user-1",
         thread_id="thread-1",
-    )
+    ))
 
     assert memory_items == ""
 

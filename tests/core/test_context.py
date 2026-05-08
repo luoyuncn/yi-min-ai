@@ -111,7 +111,8 @@ def test_context_assembler_includes_feishu_rendering_hint() -> None:
 
     assert "[渠道上下文]" in system_content
     assert "当前渠道：feishu/feishu-main" in system_content
-    assert "避免使用 Markdown 表格" in system_content
+    assert "300 字" in system_content
+    assert "剧情叙事" in system_content
 
 
 def test_context_assembler_includes_human_context_and_memory_items() -> None:

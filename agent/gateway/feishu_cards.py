@@ -1,4 +1,11 @@
-"""Feishu 结构化卡片渲染。"""
+"""Feishu 结构化卡片渲染（JSON 2.0）。
+
+设计原则：
+- 使用 JSON 2.0 结构（schema: "2.0", body.elements）
+- 每张卡片仅用一个 markdown 元素承载全部正文，消除元素数量限制与版本混用问题
+- markdown 元素支持完整 CommonMark 语法（标题、列表、表格、加粗、引用块）
+- 不再使用 1.0 专有的 div.fields、column_set 表格行、note（2.0 已废弃）
+"""
 
 from __future__ import annotations
 
@@ -6,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import re
+
 
 TOOL_NAME_ZH: dict[str, str] = {
     "assistant_identity_update": "更新助手身份",
@@ -55,10 +63,14 @@ class ToolTrace:
 
 
 class FeishuCardRenderer:
-    """把回复内容转换成更适合飞书的结构化卡片。"""
+    """把回复内容转换成飞书 JSON 2.0 卡片。"""
 
     def __init__(self, agent_name: str = "Yi Min") -> None:
         self.agent_name = agent_name
+
+    # ------------------------------------------------------------------ #
+    # 公开接口                                                              #
+    # ------------------------------------------------------------------ #
 
     def render_placeholder_card(
         self,
@@ -68,12 +80,12 @@ class FeishuCardRenderer:
         status: str | None = None,
     ) -> dict:
         title = f"{self.agent_name} 正在输出" if assistant_text else f"{self.agent_name} 正在处理"
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.append(self._build_markdown_block(status or "处理中，请稍等…"))
-        if assistant_text:
-            elements.extend([{"tag": "hr"}, self._build_markdown_block(assistant_text)])
-        return self._build_card(title=title, template="blue", elements=elements)
+        content = self._compose(
+            self._quote(user_text),
+            status or "处理中，请稍等…",
+            assistant_text,
+        )
+        return self._build_card(title=title, template="blue", content=content)
 
     def render_error_card(
         self,
@@ -81,14 +93,8 @@ class FeishuCardRenderer:
         user_text: str,
         error_text: str,
     ) -> dict:
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.append(self._build_markdown_block(error_text))
-        return self._build_card(
-            title="处理失败",
-            template="red",
-            elements=elements,
-        )
+        content = self._compose(self._quote(user_text), error_text)
+        return self._build_card(title="处理失败", template="red", content=content)
 
     def render_final_card(
         self,
@@ -100,174 +106,157 @@ class FeishuCardRenderer:
     ) -> dict:
         traces = self._normalize_tool_traces(tool_calls, tool_results)
 
-        fitness_card = self._build_fitness_card_if_applicable(
-            user_text=user_text,
-            assistant_text=assistant_text,
-            traces=traces,
-        )
+        fitness_card = self._build_fitness_card_if_applicable(user_text, assistant_text, traces)
         if fitness_card is not None:
             return fitness_card
 
-        ledger_drafts = self._extract_ledger_drafts(traces)
-        if ledger_drafts:
-            return self._build_ledger_draft_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                drafts=ledger_drafts,
-            )
+        drafts = self._extract_ledger_drafts(traces)
+        if drafts:
+            return self._build_ledger_draft_card(user_text, assistant_text, drafts)
 
-        ledger_entries = self._extract_ledger_entries(traces)
-        if ledger_entries:
+        entries = self._extract_ledger_entries(traces)
+        if entries:
             return self._build_ledger_report_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                entries=ledger_entries,
-                summary=self._extract_ledger_summary(traces),
+                user_text, assistant_text, entries, self._extract_ledger_summary(traces)
             )
 
         questions = self._extract_questions(assistant_text)
         if questions:
-            return self._build_follow_up_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                questions=questions,
-            )
+            return self._build_follow_up_card(user_text, assistant_text, questions)
 
-        return self._build_generic_answer_card(
-            user_text=user_text,
-            assistant_text=assistant_text,
-            traces=traces,
-        )
+        return self._build_generic_answer_card(user_text, assistant_text, traces)
 
     def tool_name_zh(self, tool_name: str) -> str:
         return TOOL_NAME_ZH.get(tool_name, tool_name)
 
-    def _build_tool_trace_panel(self, traces: list[ToolTrace]) -> dict | None:
-        called = [t for t in traces if t.tool_name]
-        if not called:
-            return None
-
-        lines: list[str] = []
-        for trace in called:
-            name_zh = self.tool_name_zh(trace.tool_name)
-            status = "⏳" if trace.result is None else ("❌" if self._is_tool_result_failed(trace.result) else "✅")
-            lines.append(f"{status} **{name_zh}**")
-            if trace.input:
-                brief = self._format_tool_input_brief(trace.tool_name, trace.input)
-                if brief:
-                    lines.append(f"　└ {brief}")
-
-        return {
-            "tag": "collapsible_panel",
-            "expanded": False,
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": f"🔧 调用了 {len(called)} 个工具",
-                },
-                "background_color": "grey",
-                "vertical_align": "center",
-            },
-            "elements": [self._build_markdown_block("\n".join(lines))],
-        }
-
-    def _is_tool_result_failed(self, result: str) -> bool:
-        if result.startswith("Tool execution failed:"):
-            return True
-        try:
-            payload = json.loads(result)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(payload, dict) and bool(payload.get("error"))
-
-    def _format_tool_input_brief(self, tool_name: str, input_dict: dict) -> str:
-        if not input_dict:
-            return ""
-        if tool_name == "web_search":
-            return input_dict.get("query", "")
-        if tool_name in ("file_read", "file_write"):
-            return input_dict.get("path", "") or input_dict.get("file_path", "")
-        if tool_name in ("cron_create_task", "cron_update_task"):
-            name = input_dict.get("name", "")
-            schedule = input_dict.get("schedule", "")
-            return f"{name} ({schedule})" if name else schedule
-        if tool_name == "reminder_create":
-            return input_dict.get("message", "") or input_dict.get("text", "")
-        if tool_name in ("note_add", "note_update"):
-            return self._truncate(input_dict.get("content", "") or input_dict.get("title", ""), 40)
-        if tool_name in ("memory_search", "note_search", "search_sessions"):
-            return input_dict.get("query", "")
-        if tool_name == "shell_exec":
-            return self._truncate(input_dict.get("command", ""), 50)
-        first_val = next(iter(input_dict.values()), None)
-        if isinstance(first_val, str):
-            return self._truncate(first_val, 40)
-        return ""
+    # ------------------------------------------------------------------ #
+    # 卡片类型构建器                                                         #
+    # ------------------------------------------------------------------ #
 
     def _build_generic_answer_card(
         self,
-        *,
         user_text: str,
         assistant_text: str,
-        traces: list[ToolTrace] | None = None,
+        traces: list[ToolTrace],
     ) -> dict:
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.extend(self._build_body_sections(assistant_text))
-        if traces:
-            panel = self._build_tool_trace_panel(traces)
-            if panel:
-                elements.append({"tag": "hr"})
-                elements.append(panel)
-        elements.extend(
-            [
-                {"tag": "hr"},
-                self._build_note_footer("直接回复我就行，我会继续接着处理。"),
-            ]
+        content = self._compose(
+            self._quote(user_text),
+            assistant_text,
+            self._tool_trace_line(traces),
+            "*直接回复我就行，我会继续接着处理。*",
         )
-        return self._build_card(title=f"{self.agent_name} 回复", template="indigo", elements=elements)
+        return self._build_card(title=f"{self.agent_name} 回复", template="indigo", content=content)
+
+    def _build_follow_up_card(
+        self,
+        user_text: str,
+        assistant_text: str,
+        questions: list[str],
+    ) -> dict:
+        intro = self._strip_question_lines(assistant_text, questions).strip()
+        if not intro:
+            intro = "还差一点信息，我确认完就能继续。"
+        q_block = "\n".join(f"- {q}" for q in questions)
+        content = self._compose(
+            self._quote(user_text),
+            intro,
+            "---\n**请直接回复下面这些点：**\n\n" + q_block,
+            "*你回复后，我会在原上下文里继续，不会重新来过。*",
+        )
+        return self._build_card(title="需要你确认", template="orange", content=content)
+
+    def _build_ledger_draft_card(
+        self,
+        user_text: str,
+        assistant_text: str,
+        drafts: list[dict],
+    ) -> dict:
+        total_cent = sum(self._coerce_amount_cent(d.get("amount_cent")) for d in drafts)
+        summary_line = f"**{len(drafts)} 笔草稿**　合计 {self._format_currency(total_cent)}"
+
+        rows = ["| 时段 | 商家 | 金额 | 分类 |", "|---|---|---|---|"]
+        for d in drafts:
+            label = self._label_for_occurred_at(d.get("occurred_at")) or "待确认"
+            merchant = self._escape_table_cell(d.get("merchant") or "未填写")
+            amount = self._format_currency(self._coerce_amount_cent(d.get("amount_cent")))
+            cat = d.get("category") or "未分类"
+            note = d.get("note") or ""
+            suffix = f"（{note}）" if note else ""
+            rows.append(f"| {label} | {merchant}{suffix} | {amount} | {cat} |")
+
+        content = self._compose(
+            self._quote(user_text),
+            assistant_text,
+            "---\n" + summary_line + "\n\n" + "\n".join(rows),
+            "*如果没问题，直接回复「提交吧」即可。*",
+        )
+        return self._build_card(title="记账确认", template="green", content=content)
+
+    def _build_ledger_report_card(
+        self,
+        user_text: str,
+        assistant_text: str,
+        entries: list[dict],
+        summary: dict | None,
+    ) -> dict:
+        title = self._build_ledger_report_title(entries)
+        parts: list[str] = [self._quote(user_text), assistant_text]
+
+        if summary:
+            ec = int(summary.get("entry_count", 0) or 0)
+            exp = self._format_currency(self._coerce_amount_cent(summary.get("expense_cent")))
+            inc = self._format_currency(self._coerce_amount_cent(summary.get("income_cent")))
+            net = int(summary.get("net_cent", 0) or 0)
+            net_label = self._net_label(net)
+            net_str = self._format_currency(abs(net))
+            parts.append(f"---\n**{ec} 笔**　支出 {exp}　收入 {inc}　{net_label} {net_str}")
+
+        display = entries[:5]
+        if display:
+            rows = ["| 时间 | 分类 | 商家 | 金额 |", "|---|---|---|---|"]
+            for e in display:
+                t = self._format_occurrence_short(e.get("occurred_at") or "")
+                direction = e.get("direction") or "expense"
+                cat = e.get("category") or "-"
+                merchant = self._escape_table_cell(e.get("merchant") or "-")
+                sign = "+" if direction == "income" else "-"
+                amount = f"{sign}{self._format_currency(self._coerce_amount_cent(e.get('amount_cent')))}"
+                rows.append(f"| {t} | {cat} | {merchant} | {amount} |")
+            parts.append("**最近 5 条明细**\n\n" + "\n".join(rows))
+
+            insight = self._build_ledger_insight(display, total_entries=len(entries))
+            if insight:
+                parts.append(f"*{insight}*")
+            if len(entries) > len(display):
+                parts.append(f"*还有 {len(entries) - len(display)} 条记录未展开。*")
+
+        return self._build_card(title=title, template="green", content=self._compose(*parts))
 
     def _build_fitness_card_if_applicable(
         self,
-        *,
         user_text: str,
         assistant_text: str,
         traces: list[ToolTrace],
     ) -> dict | None:
-        profile_payload = self._extract_json_payload(traces, "fitness_profile_get")
-        settings_payload = self._extract_json_payload(traces, "fitness_settings_get")
-        if profile_payload or settings_payload:
+        profile = self._extract_json_payload(traces, "fitness_profile_get")
+        settings = self._extract_json_payload(traces, "fitness_settings_get")
+        if profile is not None or settings is not None:
             return self._build_fitness_profile_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                profile=profile_payload or {},
-                settings=settings_payload or {},
-                traces=traces,
+                user_text, assistant_text, profile or {}, settings or {}, traces
             )
 
         workouts = self._extract_fitness_workouts(traces)
         if workouts:
-            return self._build_recent_fitness_workouts_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                workouts=workouts,
-                traces=traces,
-            )
+            return self._build_recent_fitness_workouts_card(user_text, assistant_text, workouts, traces)
 
         audit_lines = self._extract_fitness_audit_lines(traces)
         if audit_lines:
-            return self._build_fitness_audit_card(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                audit_lines=audit_lines,
-                traces=traces,
-            )
+            return self._build_fitness_audit_card(user_text, assistant_text, audit_lines, traces)
 
         return None
 
     def _build_fitness_profile_card(
         self,
-        *,
         user_text: str,
         assistant_text: str,
         profile: dict,
@@ -279,301 +268,117 @@ class FeishuCardRenderer:
         rpg = settings.get("rpg", {}) if isinstance(settings, dict) else {}
         world = settings.get("world", {}) if isinstance(settings, dict) else {}
 
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.append(self._build_markdown_block(assistant_text))
-        elements.append({"tag": "hr"})
-        elements.append(
-            self._build_fields_block(
-                [
-                    ("称呼 / 目标", f"{training.get('name') or '-'}\n{training.get('goal') or '-'}"),
-                    ("水平 / 计划", f"{training.get('level') or '-'}\n{training.get('plan_style') or '-'}"),
-                    ("主教练", coach.get("primary_coach") or "-"),
-                    ("世界 / 剧情", f"{world.get('world_name') or '-'}\n{self._fitness_story_label(rpg)}"),
-                ]
-            )
+        info_lines = [
+            f"**称呼** {training.get('name') or '-'}　　**目标** {training.get('goal') or '-'}",
+            f"**水平** {training.get('level') or '-'}　　**计划** {training.get('plan_style') or '-'}",
+            f"**主教练** {coach.get('primary_coach') or '-'}",
+            f"**世界** {world.get('world_name') or '-'}　　**剧情** {self._fitness_story_label(rpg)}",
+        ]
+        content = self._compose(
+            self._quote(user_text),
+            assistant_text,
+            "---\n" + "\n".join(info_lines),
+            self._tool_trace_line(traces),
+            "*如需修改目标、教练风格或 RPG 设定，直接告诉我即可。*",
         )
-        panel = self._build_tool_trace_panel(traces)
-        if panel:
-            elements.append({"tag": "hr"})
-            elements.append(panel)
-        elements.append(self._build_note_footer("如需修改目标、教练风格或 RPG 设定，直接告诉我即可。"))
-        return self._build_card(title="健身档案", template="green", elements=elements)
+        return self._build_card(title="健身档案", template="green", content=content)
 
     def _build_recent_fitness_workouts_card(
         self,
-        *,
         user_text: str,
         assistant_text: str,
         workouts: list[dict],
         traces: list[ToolTrace],
     ) -> dict:
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.append(self._build_markdown_block(assistant_text))
-        elements.append({"tag": "hr"})
-        elements.append(self._build_markdown_block("**最近训练记录**"))
-        for workout in workouts[:5]:
-            title = workout.get("title") or "-"
-            occurred_at = workout.get("occurred_at") or "-"
-            exercises = workout.get("exercises", [])
-            first_exercise = exercises[0] if exercises else "-"
-            duration = workout.get("duration_minutes")
-            elements.append(self._build_markdown_block(f"**{title}**"))
-            elements.append(self._build_markdown_block(f"{first_exercise}"))
-            elements.append(
-                self._build_fields_block(
-                    [
-                        ("训练", f"{title}\n{self._format_occurrence(occurred_at)}"),
-                        ("动作摘要", f"{first_exercise}\n{duration or '-'} 分钟"),
-                    ]
-                )
-            )
-        panel = self._build_tool_trace_panel(traces)
-        if panel:
-            elements.append({"tag": "hr"})
-            elements.append(panel)
-        elements.append(self._build_note_footer("如果你要，我也可以基于这些记录直接给出下一次训练建议。"))
-        return self._build_card(title="最近训练", template="green", elements=elements)
+        items: list[str] = []
+        for w in workouts[:5]:
+            w_title = w.get("title") or "-"
+            occurred = self._format_occurrence(w.get("occurred_at") or "")
+            exercises = w.get("exercises", [])
+            duration = w.get("duration_minutes")
+            ex_line = "、".join(exercises[:3]) if exercises else "-"
+            dur_line = f"{duration} 分钟" if duration else "-"
+            items.append(f"**{w_title}** · {occurred} · {dur_line}\n{ex_line}")
+
+        content = self._compose(
+            self._quote(user_text),
+            assistant_text,
+            "---\n**最近训练记录**\n\n" + "\n\n".join(items),
+            self._tool_trace_line(traces),
+            "*如果你要，我也可以基于这些记录直接给出下一次训练建议。*",
+        )
+        return self._build_card(title="最近训练", template="green", content=content)
 
     def _build_fitness_audit_card(
         self,
-        *,
         user_text: str,
         assistant_text: str,
         audit_lines: list[str],
         traces: list[ToolTrace],
     ) -> dict:
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.append(self._build_markdown_block(assistant_text))
-        elements.append({"tag": "hr"})
-        elements.append(self._build_markdown_block("**最近变更**"))
-        for line in audit_lines[:8]:
-            elements.append(self._build_markdown_block(f"- {line}"))
-        panel = self._build_tool_trace_panel(traces)
-        if panel:
-            elements.append({"tag": "hr"})
-            elements.append(panel)
-        elements.append(self._build_note_footer("这些记录来自 fitness 审计日志，方便你追溯是谁在什么时候改了什么。"))
-        return self._build_card(title="健身追溯日志", template="green", elements=elements)
-
-    def _build_follow_up_card(self, *, user_text: str, assistant_text: str, questions: list[str]) -> dict:
-        intro = self._strip_question_lines(assistant_text, questions).strip() or "还差一点信息，我确认完就能继续。"
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.extend([self._build_markdown_block(intro), {"tag": "hr"}])
-        elements.append(self._build_markdown_block("**请直接回复下面这些点：**"))
-        for question in questions:
-            elements.append(self._build_markdown_block(f"- {question}"))
-        elements.append(self._build_note_footer("你回复后，我会在原上下文里继续，不会重新来过。"))
-        return self._build_card(title="需要你确认", template="orange", elements=elements)
-
-    def _build_ledger_draft_card(self, *, user_text: str, assistant_text: str, drafts: list[dict]) -> dict:
-        total_cent = sum(self._coerce_amount_cent(draft.get("amount_cent")) for draft in drafts)
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.extend(
-            [
-                self._build_markdown_block(assistant_text),
-                {"tag": "hr"},
-                self._build_fields_block(
-                [
-                    ("草稿笔数", str(len(drafts))),
-                    ("合计金额", self._format_currency(total_cent)),
-                ]
-                ),
-            ]
+        items = "\n".join(f"- {line}" for line in audit_lines[:8])
+        content = self._compose(
+            self._quote(user_text),
+            assistant_text,
+            "---\n**最近变更**\n\n" + items,
+            self._tool_trace_line(traces),
+            "*这些记录来自 fitness 审计日志，方便你追溯是谁在什么时候改了什么。*",
         )
+        return self._build_card(title="健身追溯日志", template="green", content=content)
 
-        for draft in drafts:
-            label = self._label_for_occurred_at(draft.get("occurred_at")) or "待确认"
-            merchant = draft.get("merchant") or "未填写"
-            amount = self._format_currency(self._coerce_amount_cent(draft.get("amount_cent")))
-            category = draft.get("category") or "未分类"
-            occurred_at = draft.get("occurred_at") or "时间待确认"
-            note = draft.get("note") or "无备注"
-            elements.append(
-                self._build_fields_block(
-                    [
-                        (label, f"{merchant}\n{amount}"),
-                        ("分类 / 时间", f"{category}\n{self._format_occurrence(occurred_at)}"),
-                    ]
-                )
-            )
-            elements.append(self._build_note_footer(note))
+    # ------------------------------------------------------------------ #
+    # 核心 JSON 2.0 卡片构建                                                #
+    # ------------------------------------------------------------------ #
 
-        elements.append(self._build_note_footer("如果没问题，直接回复“提交吧”即可。"))
-        return self._build_card(title="记账确认", template="green", elements=elements)
-
-    def _build_ledger_report_card(
-        self,
-        *,
-        user_text: str,
-        assistant_text: str,
-        entries: list[dict],
-        summary: dict | None,
-    ) -> dict:
-        display_entries = entries[:5]
-        report_title = self._build_ledger_report_title(display_entries or entries)
-        elements: list[dict] = []
-        self._append_quote_note(elements, user_text)
-        elements.extend([self._build_markdown_block(assistant_text), {"tag": "hr"}])
-        if summary:
-            elements.append(
-                self._build_fields_block(
-                    [
-                        ("笔数", str(summary.get("entry_count", 0))),
-                        ("支出", self._format_currency(summary.get("expense_cent", 0))),
-                        ("收入", self._format_currency(summary.get("income_cent", 0))),
-                        (self._net_label(summary.get("net_cent", 0)), self._format_currency(abs(summary.get("net_cent", 0)))),
-                    ]
-                )
-            )
-            elements.append(self._build_note_footer(self._build_ledger_summary_sentence(summary)))
-
-        if display_entries:
-            elements.extend(
-                [
-                    {"tag": "hr"},
-                    self._build_markdown_block("**最近 5 条明细**"),
-                    self._build_ledger_table_header_row(),
-                ]
-            )
-
-        for entry in display_entries:
-            elements.append(self._build_ledger_table_row(entry))
-
-        insight = self._build_ledger_insight(display_entries, total_entries=len(entries))
-        if insight:
-            elements.append(self._build_note_footer(insight))
-
-        if len(entries) > len(display_entries):
-            elements.append(self._build_note_footer(f"还有 {len(entries) - len(display_entries)} 条记录未展开。"))
-
-        return self._build_card(title=report_title, template="green", elements=elements)
-
-    def _build_body_sections(self, assistant_text: str) -> list[dict]:
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", assistant_text.strip()) if part.strip()]
-        if not paragraphs:
-            return [self._build_markdown_block(" ")]
-        return [self._build_markdown_block(paragraph) for paragraph in paragraphs]
-
-    def _build_card(self, *, title: str, template: str, elements: list[dict]) -> dict:
+    def _build_card(self, *, title: str, template: str, content: str) -> dict:
         return {
+            "schema": "2.0",
             "config": {
-                "wide_screen_mode": True,
                 "enable_forward": True,
                 "update_multi": True,
             },
             "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": title,
-                },
+                "title": {"tag": "plain_text", "content": title},
                 "template": template,
             },
-            "elements": elements,
-        }
-
-    def _build_quote_note(self, user_text: str) -> dict:
-        text = self._truncate(user_text.strip() or " ", 120)
-        return {
-            "tag": "note",
-            "elements": [
-                {
-                    "tag": "lark_md",
-                    "content": f"你：{text}",
-                }
-            ],
-        }
-
-    def _append_quote_note(self, elements: list[dict], user_text: str) -> None:
-        if user_text.strip():
-            elements.append(self._build_quote_note(user_text))
-
-    def _build_markdown_block(self, content: str) -> dict:
-        return {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": content.strip() or " ",
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": content or " "},
+                ]
             },
         }
 
-    def _build_fields_block(self, fields: list[tuple[str, str]]) -> dict:
-        return {
-            "tag": "div",
-            "fields": [
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**{label}**\n{value}",
-                    },
-                }
-                for label, value in fields
-            ],
-        }
+    # ------------------------------------------------------------------ #
+    # Markdown 组合辅助                                                     #
+    # ------------------------------------------------------------------ #
 
-    def _build_column_row(
-        self,
-        cells: list[str],
-        *,
-        header: bool = False,
-    ) -> dict:
-        weights = [2, 2, 3, 2]
-        return {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "grey" if header else "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": weights[index] if index < len(weights) else 2,
-                    "vertical_align": "center",
-                    "elements": [
-                        self._build_markdown_block(
-                            f"**{cell}**" if header else cell
-                        )
-                    ],
-                }
-                for index, cell in enumerate(cells)
-            ],
-        }
+    def _compose(self, *parts: str) -> str:
+        """用双换行拼接非空段落。"""
+        return "\n\n".join(p for p in parts if p and p.strip())
 
-    def _build_ledger_table_header_row(self) -> dict:
-        return self._build_column_row(["时间", "分类", "商家", "金额"], header=True)
+    def _quote(self, user_text: str) -> str:
+        text = self._truncate((user_text or "").strip(), 120)
+        return f"> 你：{text}" if text else ""
 
-    def _build_ledger_table_row(self, entry: dict) -> dict:
-        direction = entry.get("direction") or "expense"
-        amount_cent = int(entry.get("amount_cent") or 0)
-        sign = "+" if direction == "income" else "-"
-        amount_text = f"{sign}{self._format_currency(amount_cent)}"
-        return self._build_column_row(
-            [
-                self._format_occurrence_short(entry.get("occurred_at") or ""),
-                self._format_category_label(entry.get("category") or "-", direction),
-                entry.get("merchant") or "-",
-                amount_text,
-            ]
-        )
+    def _tool_trace_line(self, traces: list[ToolTrace]) -> str:
+        called = [t for t in traces if t.tool_name]
+        if not called:
+            return ""
+        parts: list[str] = []
+        for t in called:
+            name_zh = self.tool_name_zh(t.tool_name)
+            status = "⏳" if t.result is None else ("❌" if self._is_tool_result_failed(t.result) else "✅")
+            brief = self._format_tool_input_brief(t.tool_name, t.input) if t.input else ""
+            parts.append(f"{status} {name_zh}：{brief}" if brief else f"{status} {name_zh}")
+        return f"*🔧 调用了 {len(called)} 个工具：{'  |  '.join(parts)}*"
 
-    def _build_note_footer(self, content: str) -> dict:
-        return {
-            "tag": "note",
-            "elements": [
-                {
-                    "tag": "plain_text",
-                    "content": self._truncate(content.strip() or " ", 160),
-                }
-            ],
-        }
+    # ------------------------------------------------------------------ #
+    # 工具调用数据提取                                                        #
+    # ------------------------------------------------------------------ #
 
-    def _normalize_tool_traces(self, tool_calls: list[dict], tool_results: list[dict]) -> list[ToolTrace]:
-        # tool_results is already a superset of completed tool_calls (same dict, filtered)
-        # Use tool_results as primary to avoid duplicating each call
+    def _normalize_tool_traces(
+        self, tool_calls: list[dict], tool_results: list[dict]
+    ) -> list[ToolTrace]:
         if tool_results:
             return [
                 ToolTrace(
@@ -583,7 +388,6 @@ class FeishuCardRenderer:
                 )
                 for r in tool_results
             ]
-        # Fallback for in-progress tools (no results yet)
         return [
             ToolTrace(tool_name=c.get("tool_name", ""), input=c.get("input"), result=None)
             for c in tool_calls
@@ -687,6 +491,10 @@ class FeishuCardRenderer:
         result["amount_cent"] = int(result["amount_cent"])
         return result
 
+    # ------------------------------------------------------------------ #
+    # 追问问题提取                                                            #
+    # ------------------------------------------------------------------ #
+
     def _extract_questions(self, assistant_text: str) -> list[str]:
         questions: list[str] = []
         follow_up_context = self._looks_like_follow_up_prompt(assistant_text)
@@ -703,14 +511,88 @@ class FeishuCardRenderer:
         return questions
 
     def _strip_question_lines(self, assistant_text: str, questions: list[str]) -> str:
-        filtered_lines: list[str] = []
-        normalized_questions = {question.lstrip("-").strip() for question in questions}
+        normalized_questions = {q.lstrip("-").strip() for q in questions}
+        filtered: list[str] = []
         for line in assistant_text.splitlines():
             stripped = line.strip().lstrip("-").strip()
             if stripped in normalized_questions:
                 continue
-            filtered_lines.append(line)
-        return "\n".join(filtered_lines).strip()
+            filtered.append(line)
+        return "\n".join(filtered).strip()
+
+    def _normalize_question_line(self, line: str) -> str:
+        stripped = line.strip()
+        stripped = re.sub(r"^(?:[-*•]\s*|\d+[.)]\s+)", "", stripped)
+        return stripped.strip()
+
+    def _is_question_line(self, text: str) -> bool:
+        return "？" in text or text.endswith("?")
+
+    def _looks_like_question_item(self, line: str) -> bool:
+        stripped = line.lstrip()
+        return bool(re.match(r"^(?:[-*•]\s+|\d+[.)]\s+)", stripped))
+
+    def _looks_like_follow_up_prompt(self, assistant_text: str) -> bool:
+        cues = (
+            "确认一下", "需要确认", "请确认",
+            "还差一点信息", "还差这些信息",
+            "请直接回复", "请回复",
+            "补充一下", "补充这些",
+            "为了继续", "继续处理",
+            "需要你回答", "需要你补充",
+        )
+        return any(cue in assistant_text for cue in cues)
+
+    def _is_routine_closing_question(self, text: str) -> bool:
+        closing_patterns = (
+            r"^对吧[？?]$",
+            r"^还有别的事吗[？?]$",
+            r"^还有其他事吗[？?]$",
+            r"^还有什么需要我.*吗[？?]$",
+            r"^还需要我.*吗[？?]$",
+        )
+        return any(re.match(p, text.strip()) for p in closing_patterns)
+
+    # ------------------------------------------------------------------ #
+    # 工具输入摘要                                                            #
+    # ------------------------------------------------------------------ #
+
+    def _is_tool_result_failed(self, result: str) -> bool:
+        if result.startswith("Tool execution failed:"):
+            return True
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(payload, dict) and bool(payload.get("error"))
+
+    def _format_tool_input_brief(self, tool_name: str, input_dict: dict) -> str:
+        if not input_dict:
+            return ""
+        if tool_name == "web_search":
+            return input_dict.get("query", "")
+        if tool_name in ("file_read", "file_write"):
+            return input_dict.get("path", "") or input_dict.get("file_path", "")
+        if tool_name in ("cron_create_task", "cron_update_task"):
+            name = input_dict.get("name", "")
+            schedule = input_dict.get("schedule", "")
+            return f"{name} ({schedule})" if name else schedule
+        if tool_name == "reminder_create":
+            return input_dict.get("message", "") or input_dict.get("text", "")
+        if tool_name in ("note_add", "note_update"):
+            return self._truncate(input_dict.get("content", "") or input_dict.get("title", ""), 40)
+        if tool_name in ("memory_search", "note_search", "search_sessions"):
+            return input_dict.get("query", "")
+        if tool_name == "shell_exec":
+            return self._truncate(input_dict.get("command", ""), 50)
+        first_val = next(iter(input_dict.values()), None)
+        if isinstance(first_val, str):
+            return self._truncate(first_val, 40)
+        return ""
+
+    # ------------------------------------------------------------------ #
+    # 格式化工具                                                             #
+    # ------------------------------------------------------------------ #
 
     def _label_for_occurred_at(self, occurred_at: str | None) -> str | None:
         if not occurred_at:
@@ -763,6 +645,10 @@ class FeishuCardRenderer:
             return text
         return text[: limit - 1].rstrip() + "…"
 
+    def _escape_table_cell(self, text: str) -> str:
+        """转义 markdown 表格单元格中的竖线。"""
+        return (text or "").replace("|", "\\|")
+
     def _build_ledger_report_title(self, entries: list[dict]) -> str:
         if not entries:
             return "账本总览"
@@ -794,28 +680,19 @@ class FeishuCardRenderer:
     def _build_ledger_insight(self, entries: list[dict], *, total_entries: int) -> str:
         if not entries:
             return ""
-
         latest = entries[0]
         latest_text = (
             f"最新一笔是 {latest.get('merchant') or '-'}，"
             f"{self._format_occurrence(latest.get('occurred_at') or '')}，"
-            f"{self._format_currency(int(latest.get('amount_cent') or 0))}。"
+            f"{self._format_currency(self._coerce_amount_cent(latest.get('amount_cent')))}。"
         )
-
         category_counts: dict[str, int] = {}
         for entry in entries:
             key = entry.get("category") or "-"
             category_counts[key] = category_counts.get(key, 0) + 1
         top_category, top_count = max(category_counts.items(), key=lambda item: item[1])
         category_text = f"最近 {len(entries)} 条里，`{top_category}` 类出现 {top_count} 次。"
-
-        if total_entries > len(entries):
-            return f"{latest_text} {category_text}"
         return f"{latest_text} {category_text}"
-
-    def _format_category_label(self, category: str, direction: str) -> str:
-        direction_label = "收入" if direction == "income" else "支出"
-        return f"{category}\n{direction_label}"
 
     def _fitness_story_label(self, rpg: dict) -> str:
         enabled = rpg.get("rpg_enabled")
@@ -823,44 +700,3 @@ class FeishuCardRenderer:
         if enabled:
             return f"RPG 开启 / {density}"
         return "RPG 关闭"
-
-    def _normalize_question_line(self, line: str) -> str:
-        stripped = line.strip()
-        stripped = re.sub(r"^(?:[-*•]\s*|\d+[.)]\s+)", "", stripped)
-        return stripped.strip()
-
-    def _is_question_line(self, text: str) -> bool:
-        return "？" in text or text.endswith("?")
-
-    def _looks_like_question_item(self, line: str) -> bool:
-        stripped = line.lstrip()
-        return bool(re.match(r"^(?:[-*•]\s+|\d+[.)]\s+)", stripped))
-
-    def _looks_like_follow_up_prompt(self, assistant_text: str) -> bool:
-        cues = (
-            "确认一下",
-            "需要确认",
-            "请确认",
-            "还差一点信息",
-            "还差这些信息",
-            "请直接回复",
-            "请回复",
-            "补充一下",
-            "补充这些",
-            "为了继续",
-            "继续处理",
-            "需要你回答",
-            "需要你补充",
-        )
-        return any(cue in assistant_text for cue in cues)
-
-    def _is_routine_closing_question(self, text: str) -> bool:
-        normalized = text.strip()
-        closing_patterns = (
-            r"^对吧[？?]$",
-            r"^还有别的事吗[？?]$",
-            r"^还有其他事吗[？?]$",
-            r"^还有什么需要我.*吗[？?]$",
-            r"^还需要我.*吗[？?]$",
-        )
-        return any(re.match(pattern, normalized) for pattern in closing_patterns)

@@ -62,6 +62,7 @@ class ContextAssembler:
         sender: str | None = None,
         metadata: dict | None = None,
         memory_items_text: str = "",
+        active_skill_content: str = "",
     ) -> list[dict]:
         """把所有上下文片段按固定顺序组装起来。"""
 
@@ -86,9 +87,10 @@ class ContextAssembler:
             f"当前渠道：{channel}/{channel_instance}",
         ]
         if channel == "feishu":
-            channel_block_lines.append("避免使用 Markdown 表格，优先使用短段落和平铺项目列表。")
-            channel_block_lines.append("在飞书卡片里保持格式稳定，不要依赖表格渲染。")
-            channel_block_lines.append("工具调用成功后简洁回复，不要叙述隐藏推理过程。")
+            channel_block_lines.append("【飞书简洁原则】整体回复严格控制在 300 字以内。")
+            channel_block_lines.append("剧情叙事仅限 1-2 句话，不展开长段落，不做逐动作分析。")
+            channel_block_lines.append("直接给出结论和下一步行动，省略过程描写和评估背景。")
+            channel_block_lines.append("工具调用成功后一句话确认即可，不重复工具返回的内容。")
         channel_block = "\n".join(channel_block_lines)
         reminder_policy_block = "\n".join(
             [
@@ -147,4 +149,6 @@ class ContextAssembler:
                 skill_index,
             ]
         )
+        if active_skill_content:
+            system_content = system_content + "\n\n[当前活跃技能]\n" + active_skill_content
         return [{"role": "system", "content": system_content}, *history, {"role": "user", "content": user_message}]

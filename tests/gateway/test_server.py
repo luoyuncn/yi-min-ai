@@ -253,7 +253,7 @@ def test_gateway_server_routes_messages_to_runtime_specific_app_and_adapter() ->
     assert ops_adapter.calls[0][0] == "reply_card"
     assert ops_adapter.calls[0][1] == "src-ops-1"
     assert ops_adapter.calls[1][0] == "update_card"
-    assert ops_adapter.calls[1][2]["elements"][0]["elements"][0]["content"].startswith("你：")
+    assert ops_adapter.calls[1][2]["body"]["elements"][0]["content"].startswith("> 你：")
 
 
 class FakeArchive:
@@ -369,13 +369,8 @@ def test_gateway_server_renders_ledger_scene_as_structured_card() -> None:
     assert result == "午餐草稿已创建。需要我提交吗？"
     final_card = adapter.calls[-1][2]
     assert final_card["header"]["title"]["content"] == "记账确认"
-    field_texts = [
-        field["text"]["content"]
-        for element in final_card["elements"]
-        if element.get("tag") == "div"
-        for field in element.get("fields", [])
-    ]
-    assert any("老乡鸡" in text and "¥27.00" in text for text in field_texts)
+    card_content = final_card["body"]["elements"][0]["content"]
+    assert "老乡鸡" in card_content and "¥27.00" in card_content
 
 
 class FakeApprovalInterruptCore:

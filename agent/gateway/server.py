@@ -212,12 +212,17 @@ class GatewayServer:
         streaming_logged = False
         tool_trace_by_id: dict[str, dict] = {}
         tool_call_args_buffer: dict[str, str] = {}
+        # 流式 patch 采用"跳帧"策略：同一时刻只允许 1 个 patch 在途，
+        # 若上一个还未完成则直接跳过当前中间帧（force=True 的最终帧除外）。
+        # 这样可避免 patch 任务堆积导致越输出越卡顿。
         patch_tasks: set[asyncio.Task] = set()
-        patch_lock = asyncio.Lock()
+        patch_semaphore = asyncio.Semaphore(1)
 
-        async def send_patch_card(card: dict, assistant_text: str, status: str | None) -> None:
-            try:
-                async with patch_lock:
+        async def send_patch_card(card: dict, assistant_text: str, status: str | None, *, force: bool = False) -> None:
+            if not force and patch_semaphore.locked():
+                return  # 上一个 patch 还在途，跳过此中间帧
+            async with patch_semaphore:
+                try:
                     await adapter.update_card(placeholder_id, card)
                     self._record_outbound_message(
                         runtime_app=runtime_app,
@@ -233,22 +238,21 @@ class GatewayServer:
                         status=status or "updated",
                         payload={"message_type": "interactive", "source": "feishu_patch", "card": card},
                     )
-            except Exception as exc:
-                logger.warning(
-                    f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
-                    f"event=feishu_patch_failed error={exc}",
-                    exc_info=True,
-                )
+                except Exception as exc:
+                    logger.warning(
+                        f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
+                        f"event=feishu_patch_failed error={exc}",
+                        exc_info=True,
+                    )
 
-        def schedule_patch_card(card: dict, assistant_text: str, status: str | None) -> None:
-            task = asyncio.create_task(send_patch_card(card, assistant_text, status))
+        def schedule_patch_card(card: dict, assistant_text: str, status: str | None, *, force: bool = False) -> None:
+            task = asyncio.create_task(send_patch_card(card, assistant_text, status, force=force))
             patch_tasks.add(task)
             task.add_done_callback(patch_tasks.discard)
 
         async def drain_patch_tasks() -> None:
-            if not patch_tasks:
-                return
-            await asyncio.gather(*list(patch_tasks), return_exceptions=True)
+            if patch_tasks:
+                await asyncio.gather(*list(patch_tasks), return_exceptions=True)
 
         async def patch_placeholder(
             assistant_text: str,
@@ -284,7 +288,7 @@ class GatewayServer:
             last_patch_status = status
             last_patch_card = card
 
-            schedule_patch_card(card, assistant_text, status)
+            schedule_patch_card(card, assistant_text, status, force=force)
 
         try:
             logger.info(
@@ -385,7 +389,26 @@ class GatewayServer:
                     tool_calls=self._serialize_tool_traces(tool_trace_by_id),
                     tool_results=self._serialize_tool_results(tool_trace_by_id),
                 )
-                await adapter.update_card(placeholder_id, final_card)
+                try:
+                    await adapter.update_card(placeholder_id, final_card)
+                except RuntimeError as card_err:
+                    logger.warning(
+                        f"{trace_fields(metadata, session_id=message.session_id, channel=message.channel, run_id=message.message_id)} "
+                        f"event=feishu_final_card_failed error={card_err} — falling back to text reply"
+                    )
+                    await self._send_response(
+                        message.channel,
+                        message.session_id,
+                        final_text,
+                        channel_instance=message.channel_instance,
+                        runtime_app=runtime_app,
+                        run_id=message.message_id,
+                        reply_to_channel_message_id=source_message_id,
+                        caused_by_message_id=message.message_id,
+                        thread_key=message.thread_key,
+                    )
+                    self._mark_inbound_message_status(runtime_app, message, status="completed")
+                    return final_text
                 self._record_outbound_message(
                     runtime_app=runtime_app,
                     channel=message.channel,
