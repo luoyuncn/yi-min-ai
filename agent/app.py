@@ -562,7 +562,6 @@ def _ensure_fitness_workspace(workspace_dir: Path) -> None:
 def _build_system_prompt(agent_name: str) -> str:
     """构建基础系统提示词。"""
 
-    now = datetime.now().astimezone()
     # 这段文本会作为最高优先级的 system prompt 进入每次 LLM 调用。
     # 组织顺序刻意分成：身份 -> 时间 -> 工具路由 -> 记忆/笔记边界 -> 输出约束，
     # 方便后续排查模型为什么选择某个工具或某种回复风格。
@@ -642,7 +641,6 @@ def _build_system_prompt(agent_name: str) -> str:
                 "当用户询问你有哪些工具或技能时，只能依据当前回合真正可见的工具与 [技能索引] 回答，"
                 "不要声称自己拥有未暴露的能力。"
             ),
-            f"进程启动本地时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
     )
 

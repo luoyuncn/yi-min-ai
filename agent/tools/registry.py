@@ -728,7 +728,7 @@ def _assign_visibility_tags(registry: ToolRegistry) -> None:
         "reminder_create": ("scheduling",),
         "reminder_list": ("scheduling",),
         "reminder_delete": ("scheduling",),
-        "shell_exec": ("general",),
+        "shell_exec": ("always",),
         "web_search": ("general", "current_events"),
     }
     for tool_name, tool in registry._tools.items():

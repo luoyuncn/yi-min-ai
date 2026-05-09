@@ -1362,14 +1362,12 @@ class AgentCore:
             flush_async()
 
     def _requires_approval(self, tool_name: str) -> bool:
-        if tool_name in {
+        return tool_name in {
             "assistant_identity_update",
             "file_write",
             "profile_core_update",
             "profile_write",
-        }:
-            return True
-        return bool(self.shell_requires_confirmation and tool_name == "shell_exec")
+        }
 
     def _handle_fitness_flow_guard(self, session, message) -> str | None:
         change_store = getattr(self.runtime_services, "fitness_change_store", None)

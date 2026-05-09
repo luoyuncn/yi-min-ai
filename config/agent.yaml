@@ -12,7 +12,7 @@ providers:
 tools:
   shell:
     enabled: true
-    requires_confirmation: true
+    requires_confirmation: false
 
 observability:
   langfuse:

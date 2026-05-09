@@ -397,7 +397,7 @@ def test_run_events_emits_interrupt_for_approval_required_tool(tmp_path: Path) -
     assert approvals.get_by_thread("thread-approval") is not None
 
 
-def test_run_events_emits_interrupt_for_shell_when_confirmation_is_required(tmp_path: Path) -> None:
+def test_run_events_shell_exec_does_not_require_approval(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / "skills").mkdir(parents=True)
     (workspace / "SOUL.md").write_text("# Identity\nYi Min\n", encoding="utf-8")
@@ -424,8 +424,9 @@ def test_run_events_emits_interrupt_for_shell_when_confirmation_is_required(tmp_
 
     events = asyncio.run(collect())
 
-    assert any(event.kind == "custom" and event.name == "on_interrupt" for event in events)
-    assert approvals.get_by_thread("thread-shell") is not None
+    # shell_exec does not require approval
+    assert not any(event.kind == "custom" and event.name == "on_interrupt" for event in events)
+    assert events[-1].kind == "run_finished"
 
 
 def test_run_events_can_resume_after_approval(tmp_path: Path) -> None:

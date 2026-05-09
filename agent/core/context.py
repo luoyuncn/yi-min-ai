@@ -5,8 +5,10 @@
 整理成一次模型调用所需的 `messages` 列表。
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Callable
+
+_CST = timezone(timedelta(hours=8))  # 中国标准时间，永远 UTC+8，无夏令时
 
 import tiktoken
 
@@ -20,7 +22,7 @@ class ContextAssembler:
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.system_prompt = system_prompt
-        self.now_provider = now_provider or datetime.now
+        self.now_provider = now_provider or (lambda: datetime.now(_CST))
         self._tokenizer = None
 
     def count_tokens(self, text: str) -> int:
@@ -72,14 +74,13 @@ class ContextAssembler:
         # 注意：下面这些分区标题和说明都会直接暴露给 LLM。
         # 标题用中文是为了减少中英夹杂；文件名、工具名仍保留原样，
         # 因为它们同时是代码和 function calling 的稳定接口。
-        current_time = self.now_provider().astimezone()
+        current_time = self.now_provider()
         system_time_block = "\n".join(
             [
                 "[系统时间]",
-                f"当前本地时间 ISO：{current_time.isoformat()}",
-                f"当前本地时间：{current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
-                f"当前本地日期：{current_time.strftime('%Y-%m-%d')}",
-                f"时区：{current_time.tzinfo}",
+                f"当前时间：{current_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"当前日期：{current_time.strftime('%Y-%m-%d')}",
+                f"星期：{['一', '二', '三', '四', '五', '六', '日'][current_time.weekday()]}",
             ]
         )
         channel_block_lines = [
@@ -127,9 +128,9 @@ class ContextAssembler:
             )
         identity_source_block = "\n".join(
             [
-                "[身份事实来源]",
-                "当前 `SOUL.md` 是助手活跃身份、名称、人格和风格的权威来源。",
-                "如果聊天历史、笔记、工具载荷或旧记忆与 `SOUL.md` 冲突，以 `SOUL.md` 为准。",
+                "[行为优先级]",
+                "当某个技能（SKILL.md）处于激活状态时，技能定义的角色、风格和行为规则优先于 SOUL.md。",
+                "SOUL.md 仅在无激活技能时提供默认行为基线；不得用 SOUL.md 里的人格覆盖技能的角色定义。",
             ]
         )
         system_content = "\n\n".join(
@@ -139,14 +140,14 @@ class ContextAssembler:
                 channel_block,
                 human_block,
                 identity_source_block,
-                "[SOUL.md]",
-                soul_text,
                 "[PROFILE.md]",
                 memory_text,
                 memory_items_block,
                 reminder_policy_block,
                 "[技能索引]",
                 skill_index,
+                "[SOUL.md]",
+                soul_text,
             ]
         )
         if active_skill_content:

@@ -49,7 +49,7 @@ def test_context_assembler_includes_dynamic_system_time() -> None:
     assert "[系统时间]" in system_content
     assert "2026-04-23" in system_content
     assert "18:40:00" in system_content
-    assert "2026-04-23T18:40:00+08:00" in system_content
+    assert "星期" in system_content
 
 
 def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
@@ -65,8 +65,9 @@ def test_context_assembler_marks_soul_as_identity_source_of_truth() -> None:
     )
 
     system_content = context[0]["content"]
-    assert "[身份事实来源]" in system_content
-    assert "SOUL.md` 是助手活跃身份" in system_content
+    assert "[行为优先级]" in system_content
+    assert "SKILL.md" in system_content
+    assert "SOUL.md" in system_content
 
 
 def test_context_assembler_keeps_skill_index_but_not_tool_index_block() -> None:
