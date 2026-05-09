@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from agent.gateway.normalizer import NormalizedMessage
@@ -39,7 +39,7 @@ class ProactiveScheduler:
         self._running = False
         self._task: asyncio.Task | None = None
         self._send_count: int = 0
-        self._send_count_date: date = date.today()
+        self._send_count_date = datetime.now(_CST).date()
 
     async def start(self) -> None:
         if self._running:
@@ -64,7 +64,7 @@ class ProactiveScheduler:
         logger.info("Proactive scheduler stopped")
 
     def _today_send_count(self) -> int:
-        today = date.today()
+        today = datetime.now(_CST).date()
         if today != self._send_count_date:
             self._send_count = 0
             self._send_count_date = today
@@ -117,11 +117,12 @@ class ProactiveScheduler:
         logger.info("Executing proactive cycle...")
         try:
             result = await self.agent_core.run(message)
-            if not result or _SKIP_SIGNAL in result:
+            if not result or not result.strip() or result.strip() == _SKIP_SIGNAL:
                 logger.debug("Proactive: agent chose not to send")
                 return
             logger.info("Proactive: sending message (%d chars)", len(result))
             await self.gateway.send_to_channel(self.channel_instance, self.session_id, result)
+            self._today_send_count()  # apply rollover before incrementing
             self._send_count += 1
         except Exception as e:
             logger.error("Proactive execution failed: %s", e, exc_info=True)

@@ -115,3 +115,37 @@ async def test_send_count_injected_in_trigger_message() -> None:
     await scheduler._execute_proactive()
 
     assert "3 次" in core.messages[0].body
+
+
+@pytest.mark.asyncio
+async def test_start_is_idempotent(caplog) -> None:
+    import logging
+    core = CapturingCore(response="[不打扰]")
+    gateway = CapturingGateway()
+    scheduler = ProactiveScheduler(
+        core, gateway, session_id="oc_test",
+        min_interval_minutes=60, max_interval_minutes=120,
+    )
+    with caplog.at_level(logging.WARNING, logger="agent.scheduler.proactive"):
+        await scheduler.start()
+        await scheduler.start()  # second call should warn and not create second task
+    await scheduler.stop()
+    assert "already running" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_running_task() -> None:
+    core = CapturingCore(response="[不打扰]")
+    gateway = CapturingGateway()
+    scheduler = ProactiveScheduler(
+        core, gateway, session_id="oc_test",
+        min_interval_minutes=60, max_interval_minutes=120,
+    )
+    await scheduler.start()
+    assert scheduler._task is not None
+    assert not scheduler._task.done()
+
+    await scheduler.stop()
+
+    assert scheduler._task.done()
+    assert not scheduler._running
