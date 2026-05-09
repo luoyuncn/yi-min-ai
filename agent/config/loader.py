@@ -20,6 +20,7 @@ from agent.config.models import (
     Mem0EmbeddingSettings,
     Mem0Settings,
     ObservabilitySettings,
+    ProactiveSettings,
     ProviderConfigItem,
     ProviderSettings,
     Settings,
@@ -91,6 +92,7 @@ def load_settings(agent_config_path: Path) -> Settings:
         mem0=_build_mem0_settings(_optional_mapping(raw, "mem0"), config_dir=config_dir),
         tools=_build_tool_settings(_optional_mapping(raw, "tools")),
         observability=_build_observability_settings(_optional_mapping(raw, "observability")),
+        proactive=_build_proactive_settings(_optional_mapping(raw, "proactive")),
     )
 
 
@@ -378,6 +380,22 @@ def _build_tool_settings(data: dict | None) -> ToolSettings:
             enabled=False if enabled is None else enabled,
             requires_confirmation=True if requires_confirmation is None else requires_confirmation,
         )
+    )
+
+
+def _build_proactive_settings(data: dict | None) -> ProactiveSettings | None:
+    if data is None:
+        return None
+    quiet_hours_raw = data.get("quiet_hours")
+    quiet_hours = list(quiet_hours_raw) if isinstance(quiet_hours_raw, list) else None
+    return ProactiveSettings(
+        enabled=_optional_bool_with_default(data, "enabled", False),
+        min_interval_minutes=_optional_int(data, "min_interval_minutes") or 20,
+        max_interval_minutes=_optional_int(data, "max_interval_minutes") or 90,
+        quiet_hours=quiet_hours,
+        session_id=_optional_str(data, "session_id") or "",
+        channel=_optional_str(data, "channel") or "feishu",
+        channel_instance=_optional_str(data, "channel_instance") or "default",
     )
 
 

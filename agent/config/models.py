@@ -116,6 +116,19 @@ class ToolSettings:
 
 
 @dataclass(slots=True)
+class ProactiveSettings:
+    """主动性调度配置。"""
+
+    enabled: bool = False
+    min_interval_minutes: int = 20
+    max_interval_minutes: int = 90
+    quiet_hours: list[int] | None = None
+    session_id: str = ""
+    channel: str = "feishu"
+    channel_instance: str = "default"
+
+
+@dataclass(slots=True)
 class LangfuseSettings:
     """Langfuse tracing settings."""
 
@@ -158,3 +171,4 @@ class Settings:
     mem0: Mem0Settings | None = None
     tools: ToolSettings | None = None
     observability: ObservabilitySettings | None = None
+    proactive: ProactiveSettings | None = None
