@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 )
 @click.option(
     "--enable-proactive/--no-proactive",
-    default=False,
-    help="是否启用主动性调度（默认禁用）",
+    default=True,
+    help="是否启用主动性调度（默认启用）",
 )
 @click.option(
     "--log-level",
@@ -249,29 +249,24 @@ async def run_server(
         if enable_proactive:
             proactive_cfg = settings.proactive
             if proactive_cfg and proactive_cfg.enabled:
-                if not proactive_cfg.session_id:
-                    logger.error(
-                        "proactive.enabled=true 但 session_id 为空，无法启动主动性调度器。"
-                        "请在 config/agent.yaml 的 proactive.session_id 中填入飞书 open_id 或 chat_id。"
-                    )
-                else:
-                    logger.info("启动主动性调度器")
-                    proactive_scheduler = ProactiveScheduler(
-                        agent_core=default_app.core,
-                        gateway=gateway,
-                        min_interval_minutes=proactive_cfg.min_interval_minutes,
-                        max_interval_minutes=proactive_cfg.max_interval_minutes,
-                        quiet_hours=proactive_cfg.quiet_hours,
-                        session_id=proactive_cfg.session_id,
-                        channel=proactive_cfg.channel,
-                        channel_instance=proactive_cfg.channel_instance or _default_channel_instance(settings),
-                    )
-                    try:
-                        await proactive_scheduler.start()
-                        logger.info("✓ 主动性调度器已启动")
-                    except Exception as e:
-                        logger.error("✗ 主动性调度器启动失败: %s", e)
-                        proactive_scheduler = None
+                logger.info("启动主动性调度器")
+                proactive_scheduler = ProactiveScheduler(
+                    agent_core=default_app.core,
+                    gateway=gateway,
+                    session_archive=default_app.core.session_archive,
+                    min_interval_minutes=proactive_cfg.min_interval_minutes,
+                    max_interval_minutes=proactive_cfg.max_interval_minutes,
+                    quiet_hours=proactive_cfg.quiet_hours,
+                    session_id=proactive_cfg.session_id,
+                    channel=proactive_cfg.channel,
+                    channel_instance=proactive_cfg.channel_instance or _default_channel_instance(settings),
+                )
+                try:
+                    await proactive_scheduler.start()
+                    logger.info("✓ 主动性调度器已启动")
+                except Exception as e:
+                    logger.error("✗ 主动性调度器启动失败: %s", e)
+                    proactive_scheduler = None
             else:
                 logger.warning(
                     "--enable-proactive 已设置，但 config 中 proactive.enabled=false 或无配置，已跳过"

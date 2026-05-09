@@ -23,6 +23,7 @@ class ProactiveScheduler:
         agent_core,
         gateway,
         *,
+        session_archive=None,
         min_interval_minutes: int = 20,
         max_interval_minutes: int = 90,
         quiet_hours: list[int] | None = None,
@@ -32,6 +33,7 @@ class ProactiveScheduler:
     ):
         self.agent_core = agent_core
         self.gateway = gateway
+        self.session_archive = session_archive
         self.min_interval = min_interval_minutes * 60
         self.max_interval = max_interval_minutes * 60
         self.quiet_hours = set(quiet_hours or [])
@@ -71,6 +73,20 @@ class ProactiveScheduler:
             self._send_count = 0
             self._send_count_date = today
         return self._send_count
+
+    def _resolve_session_id(self) -> str:
+        """从 SessionArchive 找最近的非内部 session，用作发送目标。"""
+        if not self.session_archive:
+            return ""
+        try:
+            sessions = self.session_archive.list_sessions(limit=20)
+            for s in sessions:
+                sid = s.get("session_id", "")
+                if sid and not sid.startswith("__"):
+                    return sid
+        except Exception as e:
+            logger.warning("Proactive: failed to resolve session_id: %s", e)
+        return ""
 
     def _is_quiet_hour(self) -> bool:
         if not self.quiet_hours:
@@ -116,6 +132,11 @@ class ProactiveScheduler:
             metadata={"type": "proactive"},
             timestamp=datetime.now(timezone.utc),
         )
+        session_id = self.session_id or self._resolve_session_id()
+        if not session_id:
+            logger.warning("Proactive: no session_id configured and no recent session found, skipping send")
+            return
+
         logger.info("Executing proactive cycle...")
         try:
             result = await self.agent_core.run(message)
@@ -124,7 +145,7 @@ class ProactiveScheduler:
                 return
             logger.info("Proactive: sending message (%d chars)", len(result))
             await self.gateway.send_to_channel(
-                self.channel, self.session_id, result,
+                self.channel, session_id, result,
                 channel_instance=self.channel_instance,
             )
             self._send_count += 1
