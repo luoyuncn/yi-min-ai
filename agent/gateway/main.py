@@ -200,10 +200,11 @@ async def run_server(
                     logger.error(f"✗ 飞书通道连接失败: {e}")
                     logger.warning("将继续运行，但飞书通道不可用")
 
-        if multi_runtime_mode and (enable_heartbeat or enable_cron):
-            logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron 扇出，已自动禁用")
+        if multi_runtime_mode and (enable_heartbeat or enable_cron or enable_proactive):
+            logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron/Proactive 扇出，已自动禁用")
             enable_heartbeat = False
             enable_cron = False
+            enable_proactive = False
 
         # 5. 启动 Heartbeat（可选）
         if enable_heartbeat:
@@ -256,10 +257,14 @@ async def run_server(
                     max_interval_minutes=proactive_cfg.max_interval_minutes,
                     quiet_hours=proactive_cfg.quiet_hours,
                     session_id=proactive_cfg.session_id,
-                    channel_instance=_default_channel_instance(settings),
+                    channel_instance=proactive_cfg.channel_instance or _default_channel_instance(settings),
                 )
-                await proactive_scheduler.start()
-                logger.info("✓ 主动性调度器已启动")
+                try:
+                    await proactive_scheduler.start()
+                    logger.info("✓ 主动性调度器已启动")
+                except Exception as e:
+                    logger.error("✗ 主动性调度器启动失败: %s", e)
+                    proactive_scheduler = None
             else:
                 logger.warning(
                     "--enable-proactive 已设置，但 config 中 proactive.enabled=false 或无配置，已跳过"
