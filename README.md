@@ -10,7 +10,9 @@ Yi Min AI Assistant，当前已经是一套可运行的本地 / 飞书 Agent 工
 - 统一 `agent.db` 会话归档、长期笔记、记账数据
 - M-flow 深度记忆接入
 - Feishu 流式占位回复与结构化卡片
-- 默认记账 / 笔记 skill 自动脚手架
+- 默认记账 / 笔记 / 健身教练 skill 自动脚手架
+- **主动性调度**：agent 随机间隔自主唤醒，自由探索后决定是否主动联系用户
+- `message_send` 工具：agent 可在任意工具调用中主动推送消息到飞书
 - Linux 常驻部署脚本与 `yimin start|stop|restart|status|logs`
 
 ## 环境要求
@@ -66,7 +68,8 @@ uv run python -m agent.main --mode cli --testing
 uv run python -m agent.main --mode web
 uv run python -m agent.main --mode gateway
 uv run python -m agent.main --mode all
-uv run python -m agent.gateway.main
+uv run python -m agent.gateway.main          # 飞书 + 主动性调度（默认开启）
+uv run python -m agent.gateway.main --no-proactive  # 关闭主动性调度
 ```
 
 跑测试：
@@ -112,6 +115,7 @@ mflow:
 - `CRON.yaml`
 - `skills/bookkeeping/SKILL.md`
 - `skills/note-taking/SKILL.md`
+- `skills/fitness-coach/SKILL.md`（健身教练 RPG skill，含等级/经验/叙事系统）
 
 运行态数据现在按下面的原则处理：
 
@@ -189,6 +193,35 @@ git pull
 uv sync
 sudo yimin restart
 ```
+
+## 主动性调度
+
+Agent 会在随机间隔（默认 20~90 分钟）自动唤醒，给自己一段"自由时间"：可以搜索感兴趣的内容、回顾用户近期状态，或只是想想有没有什么值得分享的。做完之后自己决定发不发消息给用户。
+
+- 默认开启，Gateway 启动即生效
+- 静默时段：凌晨 0~7 点不唤醒（可在 `config/agent.yaml` 的 `proactive.quiet_hours` 调整）
+- `session_id` 留空时自动使用最近的飞书会话，无需手动配置
+- agent 回复 `[不打扰]` 则静默退出，不发消息
+
+相关配置（`config/agent.yaml`）：
+
+```yaml
+proactive:
+  enabled: true
+  min_interval_minutes: 20
+  max_interval_minutes: 90
+  quiet_hours: [0, 1, 2, 3, 4, 5, 6, 7]
+  session_id: ""   # 留空自动取最近会话
+  channel: "feishu"
+```
+
+## 健身教练 Skill
+
+`workspace/skills/fitness-coach/SKILL.md` 定义了一套 RPG 叙事层：等级、经验值、负面状态、银月教练人格。数据存储走 `fitness_tools`（Python 工具层），叙事包装由 SKILL.md 驱动。
+
+- 源文件：`agent/skills/defaults/fitness-coach/SKILL.md`
+- 首次启动自动复制到 `workspace/skills/fitness-coach/`
+- `workspace/` 被 `.gitignore`，本地磁盘有，Git 里看不见
 
 ## 说明
 
