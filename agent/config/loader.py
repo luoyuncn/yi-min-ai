@@ -384,22 +384,32 @@ def _build_tool_settings(data: dict | None) -> ToolSettings:
 
 
 def _build_proactive_settings(data: dict | None) -> ProactiveSettings | None:
+    """解析可选的主动性调度配置。"""
     if data is None:
         return None
     quiet_hours_raw = data.get("quiet_hours")
     if quiet_hours_raw is None:
         quiet_hours = None
-    elif isinstance(quiet_hours_raw, list) and all(
-        isinstance(h, int) and not isinstance(h, bool) and 0 <= h < 24
-        for h in quiet_hours_raw
-    ):
-        quiet_hours = list(quiet_hours_raw)
+    elif not isinstance(quiet_hours_raw, list):
+        raise ConfigError("proactive.quiet_hours must be a list if provided")
     else:
-        raise ConfigError("proactive.quiet_hours must be a list of integers in [0, 24)")
+        quiet_hours = []
+        for i, h in enumerate(quiet_hours_raw):
+            if isinstance(h, bool) or not isinstance(h, int):
+                raise ConfigError(f"proactive.quiet_hours[{i}] must be an integer")
+            if not (0 <= h < 24):
+                raise ConfigError(f"proactive.quiet_hours[{i}] must be in [0, 24)")
+            quiet_hours.append(h)
+    min_interval_minutes = _optional_int_with_default(data, "min_interval_minutes", 20)
+    max_interval_minutes = _optional_int_with_default(data, "max_interval_minutes", 90)
+    if min_interval_minutes <= 0:
+        raise ConfigError("proactive.min_interval_minutes must be positive")
+    if min_interval_minutes > max_interval_minutes:
+        raise ConfigError("proactive.min_interval_minutes must be <= max_interval_minutes")
     return ProactiveSettings(
         enabled=_optional_bool_with_default(data, "enabled", False),
-        min_interval_minutes=_optional_int_with_default(data, "min_interval_minutes", 20),
-        max_interval_minutes=_optional_int_with_default(data, "max_interval_minutes", 90),
+        min_interval_minutes=min_interval_minutes,
+        max_interval_minutes=max_interval_minutes,
         quiet_hours=quiet_hours,
         session_id=_optional_str(data, "session_id") or "",
         channel=_optional_str(data, "channel") or "feishu",
@@ -418,6 +428,7 @@ def _optional_bool_with_default(data: dict, key: str, default: bool) -> bool:
 
 
 def _optional_int_with_default(data: dict, key: str, default: int) -> int:
+    """读取可选整数，不存在时返回 default。不能用 `or` 兜底（0 是合法整数）。"""
     value = _optional_int(data, key)
     return default if value is None else value
 
