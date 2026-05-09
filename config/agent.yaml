@@ -59,3 +59,11 @@ channels:
       workspace_dir: "../workspace"
       app_id_env: "FEISHU_APP_ID"
       app_secret_env: "FEISHU_APP_SECRET"
+
+proactive:
+  enabled: true
+  min_interval_minutes: 20
+  max_interval_minutes: 90
+  quiet_hours: [0, 1, 2, 3, 4, 5, 6, 7]
+  # session_id: ""     # 填入飞书用户 open_id 或群 chat_id
+  channel: "feishu"
