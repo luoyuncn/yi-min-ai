@@ -72,7 +72,7 @@ if message.sender == "proactive":
     domain = "proactive"  # 使用 always + 所有非 admin 工具
 ```
 
-全量工具指：所有 `always` + 各 domain 工具，但排除需要用户确认的工具（`shell_exec`、`file_write`、`profile_core_update`、`profile_write`、`assistant_identity_update`）。不修改 domain router 本身逻辑。
+全量工具指：所有已注册工具（含需要用户确认的工具）。不修改 domain router 本身逻辑。
 
 ## Decision Signal
 
