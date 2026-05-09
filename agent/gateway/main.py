@@ -13,7 +13,7 @@ from agent.gateway.instance_lock import InstanceLockError, acquire_instance_lock
 from agent.gateway.server import GatewayServer
 from agent.observability.logging import setup_logging
 from agent.runtime_paths import resolve_base_workspace
-from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
+from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler, ProactiveScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
     help="是否启用 Cron 调度（默认禁用）",
 )
 @click.option(
+    "--enable-proactive/--no-proactive",
+    default=False,
+    help="是否启用主动性调度（默认禁用）",
+)
+@click.option(
     "--log-level",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
     default="INFO",
@@ -58,6 +63,7 @@ def main(
     enable_heartbeat: bool,
     heartbeat_interval: int,
     enable_cron: bool,
+    enable_proactive: bool,
     log_level: str,
 ):
     """启动 Gateway 多通道服务器（飞书 + Heartbeat + Cron）
@@ -72,6 +78,9 @@ def main(
 
         # 启用飞书 + Heartbeat + Cron
         uv run python -m agent.gateway.main --enable-heartbeat --enable-cron
+
+        # 启用飞书 + 主动性调度
+        uv run python -m agent.gateway.main --enable-proactive
 
         # 自定义 Heartbeat 间隔（每 10 分钟）
         uv run python -m agent.gateway.main --enable-heartbeat --heartbeat-interval 10
@@ -88,6 +97,7 @@ def main(
             enable_heartbeat=enable_heartbeat,
             heartbeat_interval=heartbeat_interval,
             enable_cron=enable_cron,
+            enable_proactive=enable_proactive,
             log_level=log_level,
         ))
     except InstanceLockError as exc:
@@ -100,6 +110,7 @@ async def run_server(
     enable_heartbeat: bool,
     heartbeat_interval: int,
     enable_cron: bool,
+    enable_proactive: bool,
     log_level: str,
 ):
     """异步运行 Gateway 服务器"""
@@ -119,6 +130,7 @@ async def run_server(
     heartbeat_scheduler = None
     cron_scheduler = None
     reminder_scheduler = None
+    proactive_scheduler = None
 
     try:
         logger.info("=" * 60)
@@ -232,6 +244,27 @@ async def run_server(
             await reminder_scheduler.start()
             logger.info("✓ Reminder 调度器已启动")
 
+        # 启动主动性调度器（可选）
+        if enable_proactive:
+            proactive_cfg = settings.proactive
+            if proactive_cfg and proactive_cfg.enabled:
+                logger.info("启动主动性调度器")
+                proactive_scheduler = ProactiveScheduler(
+                    agent_core=default_app.core,
+                    gateway=gateway,
+                    min_interval_minutes=proactive_cfg.min_interval_minutes,
+                    max_interval_minutes=proactive_cfg.max_interval_minutes,
+                    quiet_hours=proactive_cfg.quiet_hours,
+                    session_id=proactive_cfg.session_id,
+                    channel_instance=_default_channel_instance(settings),
+                )
+                await proactive_scheduler.start()
+                logger.info("✓ 主动性调度器已启动")
+            else:
+                logger.warning(
+                    "--enable-proactive 已设置，但 config 中 proactive.enabled=false 或无配置，已跳过"
+                )
+
         # 7. 启动 Gateway 主循环
         logger.info("=" * 60)
         logger.info("Gateway 服务器运行中...")
@@ -255,6 +288,10 @@ async def run_server(
         if reminder_scheduler:
             await reminder_scheduler.stop()
             logger.info("✓ Reminder 调度器已停止")
+
+        if proactive_scheduler:
+            await proactive_scheduler.stop()
+            logger.info("✓ 主动性调度器已停止")
 
         if gateway is not None:
             await gateway.stop()
