@@ -10,8 +10,8 @@ class CapturingGateway:
     def __init__(self):
         self.sent = []
 
-    async def send_to_channel(self, adapter_id, session_id, content):
-        self.sent.append((adapter_id, session_id, content))
+    async def send_to_channel(self, channel, session_id, content, **kwargs):
+        self.sent.append((channel, session_id, content))
 
 
 class CapturingCore:

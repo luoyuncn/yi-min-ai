@@ -27,6 +27,7 @@ class ProactiveScheduler:
         max_interval_minutes: int = 90,
         quiet_hours: list[int] | None = None,
         session_id: str = "",
+        channel: str = "feishu",
         channel_instance: str = "feishu",
     ):
         self.agent_core = agent_core
@@ -35,6 +36,7 @@ class ProactiveScheduler:
         self.max_interval = max_interval_minutes * 60
         self.quiet_hours = set(quiet_hours or [])
         self.session_id = session_id
+        self.channel = channel
         self.channel_instance = channel_instance
         self._running = False
         self._task: asyncio.Task | None = None
@@ -92,7 +94,13 @@ class ProactiveScheduler:
                 logger.error("Proactive execution error: %s", e, exc_info=True)
 
     async def _execute_proactive(self) -> None:
-        send_count = self._today_send_count()
+        # Snapshot current CST date and send count atomically at cycle start.
+        # If this cycle straddles midnight, we treat it as belonging to the day it started.
+        cycle_date = datetime.now(_CST).date()
+        if cycle_date != self._send_count_date:
+            self._send_count = 0
+            self._send_count_date = cycle_date
+        send_count = self._send_count
         now = datetime.now(_CST)
         weekday = _WEEKDAYS[now.weekday()]
         body = (
@@ -121,8 +129,10 @@ class ProactiveScheduler:
                 logger.debug("Proactive: agent chose not to send")
                 return
             logger.info("Proactive: sending message (%d chars)", len(result))
-            await self.gateway.send_to_channel(self.channel_instance, self.session_id, result)
-            self._today_send_count()  # apply rollover before incrementing
+            await self.gateway.send_to_channel(
+                self.channel, self.session_id, result,
+                channel_instance=self.channel_instance,
+            )
             self._send_count += 1
         except Exception as e:
             logger.error("Proactive execution failed: %s", e, exc_info=True)
