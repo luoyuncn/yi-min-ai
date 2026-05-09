@@ -296,6 +296,9 @@ async def _run_gateway(
         logger.info("✓ Heartbeat 调度器已启动")
 
     # 5. 启动 Cron
+    # 把 gateway 注入 runtime_services，让 message_send 工具能主动发消息
+    default_app.core.runtime_services.gateway = gateway
+
     cron_scheduler = None
     reminder_scheduler = None
     if enable_cron:
@@ -434,6 +437,8 @@ async def _run_all(
         )
         await heartbeat_scheduler.start()
         logger.info("✓ Heartbeat 调度器已启动")
+
+    app_instance.core.runtime_services.gateway = gateway
 
     if enable_cron:
         cron_scheduler = CronScheduler(

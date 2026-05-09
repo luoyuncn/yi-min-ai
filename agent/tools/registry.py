@@ -40,6 +40,7 @@ from agent.tools.builtin.memory_tools import (
 )
 from agent.tools.builtin.note_tools import note_add, note_list_recent, note_search, note_update
 from agent.tools.builtin.reminder_tools import reminder_create, reminder_delete, reminder_list
+from agent.tools.builtin.message_tools import message_send
 from agent.tools.builtin.session_tools import read_skill, search_sessions
 from agent.tools.builtin.shell_tools import shell_exec
 from agent.tools.builtin.web_tools import web_search
@@ -647,6 +648,30 @@ def build_stage1_registry(
             )
         )
 
+    # 主动发消息给用户
+    registry.register(
+        ToolDefinition(
+            name="message_send",
+            description=(
+                "主动向用户发送一条消息（飞书渠道）。"
+                "Agent 想推送通知、提醒、总结或任何主动内容时调用。"
+                "默认发到当前对话会话，也可指定其他 session_id。"
+            ),
+            schema=_schema(
+                "message_send",
+                "主动向用户发送消息",
+                {
+                    "content": _string_field("消息正文（纯文本或 Markdown）"),
+                    "session_id": _optional_string_field("目标会话 ID，留空则发到当前对话"),
+                    "channel_instance": _optional_string_field("渠道实例名，留空则使用当前渠道"),
+                },
+                required=["content"],
+            ),
+            handler=partial(message_send, runtime_services),
+            accepts_context=True,
+        )
+    )
+
     # Shell 执行（需审批）
     if enable_shell:
         registry.register(
@@ -728,6 +753,7 @@ def _assign_visibility_tags(registry: ToolRegistry) -> None:
         "reminder_create": ("scheduling",),
         "reminder_list": ("scheduling",),
         "reminder_delete": ("scheduling",),
+        "message_send": ("always",),
         "shell_exec": ("always",),
         "web_search": ("general", "current_events"),
     }

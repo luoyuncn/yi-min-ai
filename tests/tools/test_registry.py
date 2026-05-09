@@ -41,6 +41,7 @@ def test_stage1_registry_exposes_expected_safe_tools(tmp_path) -> None:
         "search_sessions",
         "read_skill",
         "web_search",
+        "message_send",
     }
 
 

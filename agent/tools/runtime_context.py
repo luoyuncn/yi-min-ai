@@ -12,6 +12,7 @@ class RuntimeServices:
     cron_scheduler: Any | None = None
     reminder_scheduler: Any | None = None
     fitness_change_store: Any | None = None
+    gateway: Any | None = None  # GatewayServer，用于主动发消息
 
 
 @dataclass(slots=True)
