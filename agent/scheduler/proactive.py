@@ -94,13 +94,7 @@ class ProactiveScheduler:
                 logger.error("Proactive execution error: %s", e, exc_info=True)
 
     async def _execute_proactive(self) -> None:
-        # Snapshot current CST date and send count atomically at cycle start.
-        # If this cycle straddles midnight, we treat it as belonging to the day it started.
-        cycle_date = datetime.now(_CST).date()
-        if cycle_date != self._send_count_date:
-            self._send_count = 0
-            self._send_count_date = cycle_date
-        send_count = self._send_count
+        send_count = self._today_send_count()
         now = datetime.now(_CST)
         weekday = _WEEKDAYS[now.weekday()]
         body = (
@@ -114,7 +108,7 @@ class ProactiveScheduler:
         )
         message = NormalizedMessage(
             message_id=f"proactive-{uuid4()}",
-            session_id="__proactive__",
+            session_id="__proactive__",  # internal run session, distinct from outbound self.session_id
             sender="proactive",
             body=body,
             channel="internal",
