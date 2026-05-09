@@ -387,11 +387,19 @@ def _build_proactive_settings(data: dict | None) -> ProactiveSettings | None:
     if data is None:
         return None
     quiet_hours_raw = data.get("quiet_hours")
-    quiet_hours = list(quiet_hours_raw) if isinstance(quiet_hours_raw, list) else None
+    if quiet_hours_raw is None:
+        quiet_hours = None
+    elif isinstance(quiet_hours_raw, list) and all(
+        isinstance(h, int) and not isinstance(h, bool) and 0 <= h < 24
+        for h in quiet_hours_raw
+    ):
+        quiet_hours = list(quiet_hours_raw)
+    else:
+        raise ConfigError("proactive.quiet_hours must be a list of integers in [0, 24)")
     return ProactiveSettings(
         enabled=_optional_bool_with_default(data, "enabled", False),
-        min_interval_minutes=_optional_int(data, "min_interval_minutes") or 20,
-        max_interval_minutes=_optional_int(data, "max_interval_minutes") or 90,
+        min_interval_minutes=_optional_int_with_default(data, "min_interval_minutes", 20),
+        max_interval_minutes=_optional_int_with_default(data, "max_interval_minutes", 90),
         quiet_hours=quiet_hours,
         session_id=_optional_str(data, "session_id") or "",
         channel=_optional_str(data, "channel") or "feishu",
@@ -406,6 +414,11 @@ def _build_observability_settings(data: dict | None) -> ObservabilitySettings:
 
 def _optional_bool_with_default(data: dict, key: str, default: bool) -> bool:
     value = _optional_bool(data, key)
+    return default if value is None else value
+
+
+def _optional_int_with_default(data: dict, key: str, default: int) -> int:
+    value = _optional_int(data, key)
     return default if value is None else value
 
 
