@@ -269,13 +269,17 @@ class AgentCore:
                 # 历史消息先裁剪再进入模型，避免长会话把旧身份、旧工具结果、
                 # 大块 tool payload 全量带回当前轮，既省 token 也减少“旧人设复活”。
                 selected_history = self._select_history_for_context(session.history, user_message=message.body)
-                tool_route, visibility_tags = await self._select_tool_visibility(
-                    selected_history,
-                    user_message=message.body,
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    channel=message.channel,
-                )
+                if message.sender == "proactive":
+                    tool_route = "proactive"
+                    visibility_tags = None
+                else:
+                    tool_route, visibility_tags = await self._select_tool_visibility(
+                        selected_history,
+                        user_message=message.body,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        channel=message.channel,
+                    )
                 visible_tools = self.tool_registry.get_schemas(visibility_tags=visibility_tags)
                 active_skill_content = self._load_active_skill_for_route(tool_route)
                 context = self.context_assembler.assemble(
