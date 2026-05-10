@@ -84,6 +84,23 @@ def test_stage1_registry_can_filter_visible_tools_by_route(tmp_path) -> None:
     assert "web_search" not in fitness_names
 
 
+def test_stage1_registry_web_search_schema_supports_provider_options(tmp_path) -> None:
+    registry = build_stage1_registry(
+        workspace_dir=tmp_path,
+        always_on_memory=None,
+        session_archive=None,
+        skill_loader=None,
+    )
+
+    params = registry.get("web_search").schema["function"]["parameters"]
+
+    assert params["required"] == ["query"]
+    assert "allowed_domains" in params["properties"]
+    assert "blocked_domains" in params["properties"]
+    assert "topic" in params["properties"]
+    assert "time_range" in params["properties"]
+
+
 def test_stage1_registry_marks_memory_tools_as_context_aware(tmp_path) -> None:
     registry = build_stage1_registry(
         workspace_dir=tmp_path,

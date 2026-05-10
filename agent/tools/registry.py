@@ -699,15 +699,20 @@ def build_stage1_registry(
             ToolDefinition(
                 name="web_search",
                 description=(
-                    "使用 DuckDuckGo 搜索网页，返回标题、摘要和 URL。"
+                    "搜索网页，优先使用 Tavily，失败时回退 DuckDuckGo；返回结构化标题、摘要、URL 和来源信息。"
                 ),
                 schema=_schema(
                     "web_search",
                     "网页搜索",
                     {
                         "query": _string_field("搜索关键词"),
-                        "num_results": _integer_field("结果数量，默认 5"),
+                        "num_results": _integer_field("结果数量，默认 5，最多 8"),
+                        "allowed_domains": _optional_array_field("只允许这些域名或其子域名，例如 docs.python.org"),
+                        "blocked_domains": _optional_array_field("排除这些域名或其子域名，例如 example.com"),
+                        "topic": _optional_string_field("可选搜索主题，例如 general、news 或 finance"),
+                        "time_range": _optional_string_field("可选时间范围，例如 day、week、month 或 year"),
                     },
+                    required=["query"],
                 ),
                 handler=web_search,
             )
