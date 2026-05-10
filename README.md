@@ -11,6 +11,7 @@ Yi Min AI Assistant，当前已经是一套可运行的本地 / 飞书 Agent 工
 - M-flow 深度记忆接入
 - Feishu 流式占位回复与结构化卡片
 - 默认记账 / 笔记 / 健身教练 skill 自动脚手架
+- **Web Search**：Tavily 优先、DuckDuckGo 兜底的结构化网页搜索工具
 - **主动性调度**：agent 随机间隔自主唤醒，自由探索后决定是否主动联系用户
 - `message_send` 工具：agent 可在任意工具调用中主动推送消息到飞书
 - Linux 常驻部署脚本与 `yimin start|stop|restart|status|logs`
@@ -49,6 +50,12 @@ cp .env.example .env
 
 然后按你的 provider / 飞书机器人填入密钥。
 
+如果要启用高质量网页搜索，填入 Tavily key；不填也可以运行，系统会直接使用 DuckDuckGo 兜底搜索：
+
+```bash
+TAVILY_API_KEY=your-tavily-api-key
+```
+
 本地最小验证：
 
 ```bash
@@ -86,6 +93,108 @@ uv run pytest -v
   用于 Linux 常驻部署，默认接入一个飞书机器人，运行数据固定写到当前仓库里的 `workspace/`。
 - `config/providers.yaml`
   管理 provider 列表、模型名、`api_key_env`、`base_url` 等。
+
+### Web Search
+
+`web_search` 是一个只读联网工具，用于搜索网页并把结构化结果回灌给模型。系统提示词会要求模型在回答当前新闻、最新价格、天气、政策变化等可能近期变化的信息前先调用它。
+
+实现位置：
+
+- 工具实现：`agent/tools/builtin/web_tools.py`
+- 工具注册：`agent/tools/registry.py`
+- 单元测试：`tests/tools/test_web_tools.py`
+
+Provider 顺序：
+
+```text
+TAVILY_API_KEY 已配置:
+  Tavily -> DuckDuckGo fallback
+
+TAVILY_API_KEY 未配置:
+  DuckDuckGo
+
+WEB_SEARCH_PROVIDER=duckduckgo:
+  DuckDuckGo
+```
+
+Tavily 使用官方 `POST https://api.tavily.com/search` 接口；DuckDuckGo 走 `ddgs` 包的 `DDGS().text(...)`，无需 API key。工具本身不打开浏览器、不执行 JavaScript、不抓取每个结果页正文，也不在工具层做总结，只返回可引用的搜索结果。
+
+环境变量：
+
+```bash
+# 可选；配置后优先使用 Tavily
+TAVILY_API_KEY=your-tavily-api-key
+
+# 可选；默认 tavily。设为 duckduckgo 可强制只用 DuckDuckGo
+WEB_SEARCH_PROVIDER=tavily
+
+# 可选；默认 https://api.tavily.com/search，主要用于代理或 mock 测试
+TAVILY_SEARCH_URL=https://api.tavily.com/search
+
+# 可选；默认 basic
+TAVILY_SEARCH_DEPTH=basic
+
+# 可选；默认 20 秒，最小按 1 秒处理
+WEB_SEARCH_TIMEOUT_SECONDS=20
+```
+
+工具 schema：
+
+```json
+{
+  "query": "搜索关键词，必填，至少 2 个字符",
+  "num_results": "结果数量，默认 5，最大 8",
+  "allowed_domains": ["只允许这些域名或其子域名"],
+  "blocked_domains": ["排除这些域名或其子域名"],
+  "topic": "可选 Tavily topic，例如 general、news、finance",
+  "time_range": "可选 Tavily time_range，例如 day、week、month、year"
+}
+```
+
+过滤规则：
+
+- `allowed_domains` 和 `blocked_domains` 会先归一化，例如 `https://DOCS.python.org/` 变成 `docs.python.org`
+- host 命中规则为 `host == domain` 或 `host.endswith("." + domain)`
+- Tavily 请求会把白名单/黑名单映射到 `include_domains` / `exclude_domains`
+- 工具返回前仍会本地再过滤一次，保证不同 provider 行为一致
+- URL 去重时会忽略 fragment，例如 `https://example.com/a#one` 和 `https://example.com/a#two` 视为同一个结果
+- 最终结果按 provider 原始顺序截断到 `num_results`，上限 8
+
+工具返回值是 JSON 字符串，形态如下：
+
+```json
+{
+  "query": "python json",
+  "provider": "tavily",
+  "provider_chain": ["tavily"],
+  "fallback_used": false,
+  "results": [
+    {
+      "title": "json - Python documentation",
+      "url": "https://docs.python.org/3/library/json.html",
+      "snippet": "JSON encoder and decoder documentation.",
+      "source_host": "docs.python.org",
+      "score": 0.9
+    }
+  ],
+  "duration_seconds": 0.42,
+  "commentary": "Search results for ... Include a Sources section ..."
+}
+```
+
+失败行为：
+
+- Tavily 网络错误、超时、HTTP 错误、无效 JSON、空结果都会记录到 `provider_errors`
+- Tavily 失败后会自动尝试 DuckDuckGo
+- 所有 provider 都失败或都没有可用结果时，返回带 `error` 字段的 JSON，主循环会把它识别为工具失败
+- 查询参数非法时也返回带 `error` 字段的 JSON，不会让 Agent 进程崩溃
+
+测试命令：
+
+```bash
+uv run pytest tests/tools/test_web_tools.py tests/tools/test_registry.py -q
+uv run pytest -q
+```
 
 ### M-flow 与 DashScope 说明
 
