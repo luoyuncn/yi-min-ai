@@ -62,21 +62,20 @@ TAVILY_API_KEY=your-tavily-api-key
 uv run python -m agent.main --mode cli --testing
 ```
 
-真实运行：
+完整运行（Web + 飞书 + Heartbeat + Cron + Reminder + 主动性调度）：
 
 ```bash
-uv run python -m agent.main
+uv run python -m agent.main --mode all
 ```
 
 常用入口：
 
 ```bash
-uv run python -m agent.main --mode cli --testing
-uv run python -m agent.main --mode web
-uv run python -m agent.main --mode gateway
-uv run python -m agent.main --mode all
-uv run python -m agent.gateway.main          # 飞书 + 主动性调度（默认开启）
-uv run python -m agent.gateway.main --no-proactive  # 关闭主动性调度
+uv run python -m agent.main --mode all              # 完整运行，默认全部开启
+uv run python -m agent.main --mode gateway          # 仅飞书 Gateway + 后台调度
+uv run python -m agent.main --mode web              # 仅 Web UI
+uv run python -m agent.main --mode cli --testing    # 本地 CLI 测试，不连真实服务
+uv run python -m agent.main --mode all --no-proactive  # 临时关闭主动性调度
 ```
 
 跑测试：
@@ -307,7 +306,7 @@ sudo yimin restart
 
 Agent 会在随机间隔（默认 20~90 分钟）自动唤醒，给自己一段"自由时间"：可以搜索感兴趣的内容、回顾用户近期状态，或只是想想有没有什么值得分享的。做完之后自己决定发不发消息给用户。
 
-- 默认开启，Gateway 启动即生效
+- 默认开启，`agent.main --mode gateway` 和 `agent.main --mode all` 启动即生效
 - 静默时段：凌晨 0~7 点不唤醒（可在 `config/agent.yaml` 的 `proactive.quiet_hours` 调整）
 - `session_id` 留空时自动使用最近的飞书会话，无需手动配置
 - agent 回复 `[不打扰]` 则静默退出，不发消息
@@ -334,8 +333,8 @@ proactive:
 
 ## 说明
 
-- 默认单主体配置下，Heartbeat / Cron 可以使用同一个 `workspace/` 上下文；高级多 runtime 配置仍会自动禁用 Heartbeat / Cron
-- `agent.main` / `agent.gateway.main` 现在都会按配置解析 workspace，不再硬编码 `workspace/`
+- 默认单主体配置下，Heartbeat / Cron / Reminder / Proactive 可以使用同一个 `workspace/` 上下文；高级多 runtime 配置仍会自动禁用后台调度扇出
+- 推荐统一使用 `agent.main` 启动；历史上的 `agent.gateway.main` 仅保留兼容，不再作为主入口
 - shell 脚本通过 `.gitattributes` 固定为 LF，避免 Linux 执行报错
 
 ## 相关文档

@@ -61,6 +61,11 @@ logger = logging.getLogger(__name__)
     help="是否启用 Cron（默认启用）",
 )
 @click.option(
+    "--enable-proactive/--no-proactive",
+    default=True,
+    help="是否启用主动性调度（默认启用）",
+)
+@click.option(
     "--web-port",
     type=int,
     default=8000,
@@ -80,6 +85,7 @@ def main(
     enable_heartbeat: bool,
     heartbeat_interval: int,
     enable_cron: bool,
+    enable_proactive: bool,
     web_port: int,
     log_level: str,
 ):
@@ -137,6 +143,7 @@ def main(
                 enable_heartbeat=enable_heartbeat,
                 heartbeat_interval=heartbeat_interval,
                 enable_cron=enable_cron,
+                enable_proactive=enable_proactive,
             ))
         elif mode == "all":
             asyncio.run(_run_all(
@@ -146,6 +153,7 @@ def main(
                 enable_heartbeat=enable_heartbeat,
                 heartbeat_interval=heartbeat_interval,
                 enable_cron=enable_cron,
+                enable_proactive=enable_proactive,
                 web_port=web_port,
             ))
     except KeyboardInterrupt:
@@ -208,12 +216,13 @@ async def _run_gateway(
     enable_heartbeat: bool,
     heartbeat_interval: int,
     enable_cron: bool,
+    enable_proactive: bool,
 ):
     """运行 Gateway 模式"""
     _apply_no_proxy()
     from agent.app import build_channel_apps_async
     from agent.gateway.server import GatewayServer
-    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
+    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler, ProactiveScheduler
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
@@ -226,6 +235,7 @@ async def _run_gateway(
     gateway = GatewayServer(default_app)
     for runtime_id, app in apps.items():
         gateway.register_runtime_app(runtime_id, app)
+    _inject_gateway_service(apps, gateway)
 
     multi_runtime_mode = is_multi_runtime_settings(settings)
 
@@ -276,10 +286,11 @@ async def _run_gateway(
                     logger.error(f"✗ 飞书通道连接失败: {e}")
                     logger.warning("将继续运行，但飞书通道不可用")
 
-    if multi_runtime_mode and (enable_heartbeat or enable_cron):
-        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron 扇出，已自动禁用")
+    if multi_runtime_mode and (enable_heartbeat or enable_cron or enable_proactive):
+        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron/Proactive 扇出，已自动禁用")
         enable_heartbeat = False
         enable_cron = False
+        enable_proactive = False
 
     # 4. 启动 Heartbeat
     heartbeat_scheduler = None
@@ -295,12 +306,9 @@ async def _run_gateway(
         await heartbeat_scheduler.start()
         logger.info("✓ Heartbeat 调度器已启动")
 
-    # 5. 启动 Cron
-    # 把 gateway 注入 runtime_services，让 message_send 工具能主动发消息
-    default_app.core.runtime_services.gateway = gateway
-
     cron_scheduler = None
     reminder_scheduler = None
+    proactive_scheduler = None
     if enable_cron:
         logger.info("启动 Cron 调度器")
         cron_scheduler = CronScheduler(
@@ -326,6 +334,14 @@ async def _run_gateway(
         await reminder_scheduler.start()
         logger.info("✓ Reminder 调度器已启动")
 
+    if enable_proactive:
+        proactive_scheduler = await _start_proactive_scheduler(
+            ProactiveScheduler,
+            settings=settings,
+            app=default_app,
+            gateway=gateway,
+        )
+
     # 6. 启动 Gateway 主循环
     logger.info("=" * 60)
     logger.info("Gateway 服务器运行中...")
@@ -344,6 +360,8 @@ async def _run_gateway(
             await cron_scheduler.stop()
         if reminder_scheduler:
             await reminder_scheduler.stop()
+        if proactive_scheduler:
+            await proactive_scheduler.stop()
         await gateway.stop()
         logger.info("✓ 服务器已停止")
 
@@ -355,6 +373,7 @@ async def _run_all(
     enable_heartbeat: bool,
     heartbeat_interval: int,
     enable_cron: bool,
+    enable_proactive: bool,
     web_port: int,
 ):
     """同时运行 Web + Gateway"""
@@ -362,7 +381,7 @@ async def _run_all(
     import uvicorn
     from agent.app import build_app_async, build_channel_apps_async
     from agent.gateway.server import GatewayServer
-    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler
+    from agent.scheduler import HeartbeatScheduler, CronScheduler, ReminderScheduler, ProactiveScheduler
 
     # 1. 构建 Agent 应用
     logger.info("正在加载 Agent 应用...")
@@ -375,6 +394,7 @@ async def _run_all(
     gateway = GatewayServer(app_instance)
     for runtime_id, app in apps.items():
         gateway.register_runtime_app(runtime_id, app)
+    _inject_gateway_service(apps, gateway)
 
     multi_runtime_mode = is_multi_runtime_settings(settings)
 
@@ -417,15 +437,17 @@ async def _run_all(
                 except Exception as e:
                     logger.warning(f"飞书通道连接失败: {e}")
 
-    if multi_runtime_mode and (enable_heartbeat or enable_cron):
-        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron 扇出，已自动禁用")
+    if multi_runtime_mode and (enable_heartbeat or enable_cron or enable_proactive):
+        logger.warning("多 runtime 模式下暂未支持 Heartbeat/Cron/Proactive 扇出，已自动禁用")
         enable_heartbeat = False
         enable_cron = False
+        enable_proactive = False
 
     # 4. 启动调度器
     heartbeat_scheduler = None
     cron_scheduler = None
     reminder_scheduler = None
+    proactive_scheduler = None
 
     if enable_heartbeat:
         heartbeat_scheduler = HeartbeatScheduler(
@@ -437,8 +459,6 @@ async def _run_all(
         )
         await heartbeat_scheduler.start()
         logger.info("✓ Heartbeat 调度器已启动")
-
-    app_instance.core.runtime_services.gateway = gateway
 
     if enable_cron:
         cron_scheduler = CronScheduler(
@@ -462,6 +482,14 @@ async def _run_all(
         app_instance.core.runtime_services.reminder_scheduler = reminder_scheduler
         await reminder_scheduler.start()
         logger.info("✓ Reminder 调度器已启动")
+
+    if enable_proactive:
+        proactive_scheduler = await _start_proactive_scheduler(
+            ProactiveScheduler,
+            settings=settings,
+            app=app_instance,
+            gateway=gateway,
+        )
 
     # 5. 启动 Web UI（在后台任务中）
     from agent.web.app import create_web_app
@@ -503,8 +531,43 @@ async def _run_all(
             await cron_scheduler.stop()
         if reminder_scheduler:
             await reminder_scheduler.stop()
+        if proactive_scheduler:
+            await proactive_scheduler.stop()
         await gateway.stop()
         logger.info("✓ 所有服务已停止")
+
+
+def _inject_gateway_service(apps, gateway) -> None:
+    """把 gateway 注入 runtime services，让 message_send 可用。"""
+    for app in apps.values():
+        app.core.runtime_services.gateway = gateway
+
+
+async def _start_proactive_scheduler(scheduler_cls, *, settings, app, gateway):
+    proactive_cfg = settings.proactive
+    if not proactive_cfg or not proactive_cfg.enabled:
+        logger.warning("主动性调度已通过 config 禁用，跳过启动")
+        return None
+
+    logger.info("启动主动性调度器")
+    scheduler = scheduler_cls(
+        agent_core=app.core,
+        gateway=gateway,
+        session_archive=app.core.session_archive,
+        min_interval_minutes=proactive_cfg.min_interval_minutes,
+        max_interval_minutes=proactive_cfg.max_interval_minutes,
+        quiet_hours=proactive_cfg.quiet_hours,
+        session_id=proactive_cfg.session_id,
+        channel=proactive_cfg.channel,
+        channel_instance=proactive_cfg.channel_instance or _default_channel_instance(settings),
+    )
+    try:
+        await scheduler.start()
+        logger.info("✓ 主动性调度器已启动")
+        return scheduler
+    except Exception as e:
+        logger.error("✗ 主动性调度器启动失败: %s", e)
+        return None
 
 
 def _default_channel_instance(settings) -> str:
